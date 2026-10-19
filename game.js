@@ -49,6 +49,14 @@ function mods(p) {
     fog: n('fog') > 0,
     lead: 1.8 ** n('lead'),
     reverse: n('reverse') % 2 === 1,
+    boom: b('boom') > 0,
+    rocket: b('rocket') > 0,
+    domino: b('domino') > 0,
+    pinball: b('pinball') > 0,
+    wind: p.nerfs.filter(a => a.id === 'wind').reduce((s, a) => s + (a.dir || 1), 0),
+    banana: n('banana') > 0,
+    wide: n('wide') > 0,
+    fuse: n('fuse') > 0,
   };
 }
 const swayNow = (aim, m) => m.sway * (Math.sin(aim.t * 2.1) + 0.5 * Math.sin(aim.t * 5.3));
@@ -82,6 +90,10 @@ function runFx(e) {
     case 'contact': if (e.fast) { slowmo = SLOWMO; shake = 0.25; } break;
     case 'quake': shake = 1; sfx.quake(); banner('EARTHQUAKE!'); emit(0, 0.05, HEAD_Z - 0.4, 80, ['#8a6a4a', '#c9a27a', '#ffffff'], 3, 0.03); break;
     case 'release': sfx.release(); break;
+    case 'boom': shake = 0.8; slowmo = SLOWMO; sfx.boom(); banner('KABOOM!'); emit(e.x, 0.2, e.z, 90, ['#ff8a00', '#ffc93c', '#ff4560', '#ffffff'], 4, 0.035); break;
+    case 'rocket': sfx.rocket(); emit(e.x, 0.15, e.z + 0.2, 50, ['#ff8a00', '#ffc93c', '#ffffff'], 2.5, 0.03, 2); break;
+    case 'banana': sfx.slip(); toast('Slipped on a <b>Banana Peel</b>!', 'banana', kindColor('nerf')); emit(e.x, 0.1, e.z, 25, ['#ffe135', '#fff6a8'], 2, 0.03); break;
+    case 'mulligan': banner('MULLIGAN!', `${p.name} gets a do-over`); sfx.spare(); break;
     case 'toast': toast(e.html, e.ic, e.color); if (isMine(players[e.hurt])) sfx.sabotage(); break;
     case 'ult':
       banner(ULTS[p.ult].name.toUpperCase(), `${p.name} used their Ultimate`);
@@ -243,7 +255,7 @@ function renderTurn() {
   $('turn').innerHTML = `<div class="top"><span class="avatar">${initial(p)}</span><div><h2>${p.name}${who}</h2>
     <div class="meta">Frame ${frame + 1} · Ball ${(p.frames[frame]?.length ?? 0) + 1}<span id="clock"></span></div></div></div>`
     + `<div class="chips">${p.buffs.map(a => chip('buff', a.id, AUGS[a.id].name)).join('')}`
-    + p.nerfs.map(a => chip('nerf', a.id, AUGS[a.id].name, ` <small>· ${a.from}</small>`)).join('')
+    + p.nerfs.map(a => chip('nerf', a.id, AUGS[a.id].name + (a.id === 'wind' ? (a.dir > 0 ? ' →' : ' ←') : ''), ` <small>· ${a.from}</small>`)).join('')
     + (L.roll?.wall ? chip('nerf', 'wall', 'Brick Wall') : '') + '</div>';
   const u = ULTS[p.ult], btn = $('ultbtn');
   btn.innerHTML = `<span class="orb">${icon(p.ult)}<span class="key">U</span></span><span><div class="lbl">${p.ultArmed ? 'ARMED' : p.ultUsed ? 'ULTIMATE USED' : 'ULTIMATE · READY'}</div><div class="nm">${u.name}</div><div class="ds">${u.desc}</div></span>`;
@@ -448,7 +460,7 @@ function applyPick(p, offer, r) {
   } else {
     let t = players[r.target];
     if (!t || t === p) t = leader(p);
-    t.nerfs.push({ id: r.id, from: p.name });
+    t.nerfs.push({ id: r.id, from: p.name, dir: pick([-1, 1]) }); // dir: which way a Crosswind blows
     fx({ e: 'toast', html: `${pname(p)} hit ${pname(t)} with <b>${a.name}</b>`, ic: r.id, color: kindColor(a.kind), hurt: players.indexOf(t) });
   }
   syncMeta();
@@ -483,8 +495,13 @@ async function runDrafts() {
 
 function startTurn() {
   players[cur].frames[frame] = [];
-  rack(L);
+  rackFor(players[cur]);
   setupAim();
+}
+// a fresh rack; Wide Rack spreads it out (still inside the lane)
+function rackFor(p) {
+  rack(L);
+  if (mods(p).wide) for (const q of L.pins) { q.x *= 1.1; q.z = HEAD_Z + (q.z - HEAD_Z) * 1.3; }
 }
 
 function setupAim() {
@@ -496,7 +513,7 @@ function setupAim() {
   L.roll = { bumpers: m.bumpers && rolls.length === 0, wall: p.wallNext ? pick([-1, 1]) : 0, first: rolls.length === 0 || freshRack(rolls), steer: 0 };
   if (p.wallNext) fx({ e: 'toast', html: `A brick wall blocks ${pname(p)}'s lane!`, ic: 'wall', color: '#8b5cff' });
   p.wallNext = false;
-  L.timer = AIM_TIME;
+  L.timer = m.fuse ? 6 : AIM_TIME;
   views[0].setOwner(p.name, p.color);
   syncMeta();
   if (p.bot) botTurn();
@@ -560,6 +577,7 @@ const simEvent = (name, a, b) => {
   if (name === 'knock') fx({ e: 'knock', x: a, z: b });
   else if (name === 'pin') { if (a > 0.03) fx({ e: 'pin', s: a, x: b }); }
   else if (name === 'contact') fx({ e: 'contact', fast: L.roll.first && a > 5 });
+  else if (name === 'boom' || name === 'rocket' || name === 'banana') fx({ e: name, x: a, z: b });
   else fx({ e: name, x: a });
 };
 
@@ -567,6 +585,14 @@ async function endRoll() {
   phase = 'result'; L.phase = 'result';
   const p = players[cur], rolls = p.frames[frame];
   const knocked = L.roll.standingBefore - standingCount(L);
+  if (rolls.length === 0 && knocked <= 3 && p.buffs.some(a => a.id === 'mulligan')) { // the roll never happened
+    p.buffs = p.buffs.filter(a => a.id !== 'mulligan');
+    fx({ e: 'mulligan', who: cur });
+    syncMeta();
+    await wait(1400);
+    rackFor(p);
+    return setupAim();
+  }
   rolls.push(knocked);
   const mk = marks(rolls).at(-1);
   log(`${p.name} frame ${frame + 1}: ${knocked} pins${L.ball.gutter ? ' (gutter)' : ''} -> [${marks(rolls).join(' ')}] total ${total(p.frames)}`);
@@ -574,7 +600,7 @@ async function endRoll() {
   syncMeta();
   await wait(1400);
   if (!frameDone(frame, rolls)) {
-    if (freshRack(rolls)) rack(L); else sweep(L);
+    if (freshRack(rolls)) rackFor(p); else sweep(L);
     return setupAim();
   }
   if (++cur < players.length) return startTurn();

@@ -1,6 +1,15 @@
 // Static game content: icons, augments, ultimates, player palette.
 // 24x24 stroke icons, drawn with currentColor
 export const ICONS = {
+  boom: '<path d="M12 2l2 5 5-2-2 5 5 2-5 2 2 5-5-2-2 5-2-5-5 2 2-5-5-2 5-2-2-5 5 2z"/>',
+  rocket: '<path d="M12 2c4 3 5 8 3 13H9C7 10 8 5 12 2z"/><circle cx="12" cy="9" r="1.8"/><path d="M9 14l-3 3 1 3 3-2M15 14l3 3-1 3-3-2M12 18v4"/>',
+  domino: '<rect x="3.5" y="6" width="6" height="13" rx="1" transform="rotate(-18 6.5 12.5)"/><rect x="14" y="5" width="6" height="14" rx="1"/><circle cx="17" cy="9" r=".9" fill="currentColor"/><circle cx="17" cy="15" r=".9" fill="currentColor"/>',
+  mulligan: '<path d="M4 12a8 8 0 1 0 2.5-5.8"/><path d="M4 3v5h5"/>',
+  pinball: '<circle cx="7" cy="6" r="2.5"/><path d="M3 20l14-5M9 8l12 4-4 3"/>',
+  wind: '<path d="M3 8h11a3 3 0 1 0-3-3M3 12h15a3 3 0 1 1-3 3M3 16h8"/>',
+  banana: '<path d="M5 5c0 9 5 14 15 13-7-2-11-6-12-13z"/><path d="M5 5L4 3"/>',
+  wide: '<path d="M3 12h18M7 8l-4 4 4 4M17 8l4 4-4 4"/>',
+  fuse: '<circle cx="10" cy="14" r="7"/><path d="M15 9l3-3M18 6l1-2M19 7l2-1"/>',
   boulder: '<circle cx="12" cy="12" r="9"/><circle cx="9.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="14.5" cy="8.5" r="1.3" fill="currentColor"/><circle cx="12" cy="12.5" r="1.3" fill="currentColor"/>',
   heavy: '<path d="M8.5 9.5a3.5 3.5 0 1 1 7 0"/><path d="M6.5 10h11l1.8 10H4.7z"/>',
   steady: '<circle cx="12" cy="12" r="7"/><path d="M12 2v5M12 17v5M2 12h5M17 12h5"/><circle cx="12" cy="12" r="1.4" fill="currentColor"/>',
@@ -38,6 +47,11 @@ export const AUGS = {
   magnet:  { name: 'Pin Magnet', kind: 'buff', desc: 'Your ball curves toward standing pins.' },
   bumpers: { name: 'Bumpers', kind: 'buff', desc: 'Bumpers on the first roll of every frame.' },
   power:   { name: 'Power Surge', kind: 'buff', desc: '+30% ball speed for extra pin carnage.' },
+  boom:    { name: 'Kaboom', kind: 'buff', desc: 'Your ball explodes on the first pin it touches.' },
+  rocket:  { name: 'Rocket Boost', kind: 'buff', desc: 'Afterburners kick in mid-lane: +60% speed, dead straight.' },
+  domino:  { name: 'Domino Effect', kind: 'buff', desc: 'Pins topple each other at the lightest touch.' },
+  mulligan:{ name: 'Mulligan', kind: 'buff', desc: 'First ball knocks 3 or fewer? Pretend it never happened.' },
+  pinball: { name: 'Pinball Wizard', kind: 'buff', desc: 'Side walls become super bouncy and fling pins back in.' },
   butter:  { name: 'Butterfingers', kind: 'nerf', desc: "Target's power meter moves twice as fast." },
   grease:  { name: 'Greasy Lane', kind: 'nerf', desc: "Target's ball drifts randomly down the lane." },
   shaky:   { name: 'Shaky Aim', kind: 'nerf', desc: "Target's aim sways three times harder." },
@@ -45,6 +59,10 @@ export const AUGS = {
   fog:     { name: 'Fog of War', kind: 'nerf', desc: 'Target cannot see the pins while aiming.' },
   lead:    { name: 'Lead Pins', kind: 'nerf', desc: "Target's pins are heavy and hard to topple." },
   reverse: { name: 'Backwards', kind: 'nerf', desc: "Target's left and right controls are swapped." },
+  wind:    { name: 'Crosswind', kind: 'nerf', desc: "A steady wind pushes the target's ball sideways." },
+  banana:  { name: 'Banana Peel', kind: 'nerf', desc: "Target's ball slips on a peel somewhere down the lane." },
+  wide:    { name: 'Wide Rack', kind: 'nerf', desc: "Target's pins are spread out. Good luck carrying." },
+  fuse:    { name: 'Short Fuse', kind: 'nerf', desc: 'Target gets 6 seconds to aim, not 20.' },
 };
 export const ULTS = {
   wreck:   { name: 'Wrecking Ball', desc: 'Your next roll is a giant, triple-weight ball.' },

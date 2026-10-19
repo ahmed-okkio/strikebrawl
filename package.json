@@ -1,7 +1,7 @@
 {
   "name": "strike-brawl",
   "productName": "Strike Brawl",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "Chaotic party bowling with augments and sabotage.",
   "type": "module",
   "main": "main.cjs",
@@ -9,7 +9,7 @@
     "start": "electron .",
     "test": "node test.js",
     "dist": "electron-builder --win",
-    "release": "electron-builder --win --publish always"
+    "release": "electron-builder --win && node release.cjs"
   },
   "dependencies": {
     "@fontsource/lilita-one": "^5.3.0",
@@ -37,7 +37,8 @@
       "!nettest.cjs",
       "!make-icon.cjs",
       "!dist/**",
-      "!release/**"
+      "!release/**",
+      "!release.cjs"
     ],
     "win": {
       "target": "nsis",
@@ -54,6 +55,16 @@
       "repo": "strikebrawl",
       "releaseType": "release"
     },
-    "asar": false
+    "asar": false,
+    "extraResources": [
+      {
+        "from": "node_modules/three/examples/jsm",
+        "to": "app/node_modules/three/examples/jsm",
+        "filter": [
+          "postprocessing/**",
+          "shaders/**"
+        ]
+      }
+    ]
   }
 }

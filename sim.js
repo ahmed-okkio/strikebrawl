@@ -3,12 +3,14 @@
 // Motion is mostly planar; pins get a simple vertical hop + tumble so big hits send them flying.
 
 export const LANE_HALF = 0.53, GUTTER_R = 0.12, GUTTER_X = LANE_HALF + GUTTER_R;
-export const KICKBACK_X = 0.84; // inner face of the side walls around the pin deck
+export const KICKBACK_X = 0.77; // inner face of the side walls around the pin deck
 export const DECK_Z = -16.9;    // kickback walls start here
 export const HEAD_Z = -18.3, PIT_Z = -19.6, PIT_BACK = -20.35, ROW_DZ = 0.264, PIN_DX = 0.305;
 export const BALL_R = 0.11, PIN_R = 0.06, PIN_LEN = 0.38, BALL_M = 7, PIN_M = 1.5;
 export const START_Z = 0.4, WALL_Z = -13;
 const G = 9.8;
+const KICK_E = 0.75; // kickback walls are lively: pins rebound back into the deck
+const PIN_PIN = 0.6; // how hard a pin must be hit by another pin to topple (x ball threshold)
 
 export function rackSpots() {
   const s = [];
@@ -41,6 +43,7 @@ export function launch(L, { x, angle, spin, power }, m) {
   L.roll.m = m;
   L.roll.t = 0; L.roll.settle = 0;
   L.roll.standingBefore = standingCount(L);
+  L.roll.slipZ = -5 - Math.random() * 7; // where a Banana Peel lies
 }
 
 function collide(a, b, ra, rb, ma, mb, ax, az, bx, bz) {
@@ -64,7 +67,9 @@ function circles(p) {
   const s = Math.sin(p.tilt * Math.PI / 2);
   return LYING.map(([o, r]) => [p.x + p.dx * o * s, p.z + p.dz * o * s, r]);
 }
-const airborne = p => p.y > 0.25;
+const airborne = p => p.y > 0.25; // above the ball
+// pins are tall: a flying pin still clips a standing pin's body, but sails over pins lying flat
+const meets = (a, b) => Math.abs(a.y - b.y) < (a.standing || b.standing ? PIN_LEN - 0.05 : 0.15);
 
 // Advance one lane by dt. ev(name, ...args) reports sound/particle events. Returns true once everything has settled.
 export function step(L, dt, ev) {
@@ -86,9 +91,21 @@ export function step(L, dt, ev) {
     const s = p.standing ? 0 : Math.sin(p.tilt * Math.PI / 2) * PIN_LEN;
     const xs = [p.x - PIN_R, p.x + PIN_R, p.x + p.dx * s];
     const over = Math.max(...xs) - side, under = -side - Math.min(...xs);
-    if (over > 0) { p.x -= over; p.vx = -Math.abs(p.vx) * 0.5; if (p.standing) knock(p, -1, p.vz); }
-    if (under > 0) { p.x += under; p.vx = Math.abs(p.vx) * 0.5; if (p.standing) knock(p, 1, p.vz); }
+    if (over > 0) { p.x -= over; p.vx = -Math.abs(p.vx) * (m.pinball ? 1.2 : KICK_E); if (p.standing) knock(p, -1, p.vz); }
+    if (under > 0) { p.x += under; p.vx = Math.abs(p.vx) * (m.pinball ? 1.2 : KICK_E); if (p.standing) knock(p, 1, p.vz); }
     if (p.y < 0 && p.z > PIT_Z) { p.z = PIT_Z - 0.001; p.vz = Math.min(p.vz, 0); } // a pin down in the pit can't climb back out
+  };
+  // Kaboom: every pin near the blast is thrown outward and up
+  const boom = (x, z) => {
+    for (const p of L.pins) {
+      const dx = p.x - x, dz = p.z - z, d = Math.hypot(dx, dz) || 1;
+      if (p.gone || d > 0.55) continue;
+      const f = 1 + 4 * (1 - d / 0.55);
+      p.vx += dx / d * f; p.vz += dz / d * f - 0.5;
+      knock(p, dx, dz);
+      p.vy = Math.max(p.vy, 1.2 + Math.random() * 1.6); p.spin = (Math.random() - 0.5) * 30;
+    }
+    ev('boom', x, z);
   };
   const hit = (p, j, lead) => {
     const dv = j / pinM;
@@ -98,6 +115,9 @@ export function step(L, dt, ev) {
   if (ball.active) {
     if (ball.z < -5 && ball.vz < 0) ball.vx += ball.spin * m.hook * dt;
     if (m.grease) ball.vx += (Math.random() - 0.5) * 9 * m.grease * dt;
+    if (m.wind && !ball.gutter && ball.vz < 0) ball.vx += m.wind * 0.07 * dt;
+    if (m.rocket && !R.rocketed && !ball.gutter && ball.z < -7) { R.rocketed = true; ball.vz *= 1.6; ball.vx *= 0.3; ev('rocket', ball.x, ball.z); }
+    if (m.banana && !R.slipped && !ball.gutter && ball.z < R.slipZ) { R.slipped = true; ball.vx += (Math.random() < 0.5 ? -1 : 1) * (0.15 + Math.random() * 0.15); ev('banana', ball.x, ball.z); }
     if (R.missile && ball.vz < 0) ball.vx += (R.steer || 0) * 2.2 * dt;
     if (m.magnet && ball.z < -8) {
       const live = L.pins.filter(p => p.standing);
@@ -129,7 +149,10 @@ export function step(L, dt, ev) {
         const j = collide(ball, p, ball.r, r, ball.m, pinM, ball.x, ball.z, cx, cz);
         if (!j) continue;
         if (j > 0.3) ev('pin', j / 12, p.x); // resting contact is silent
-        if (p.standing && !R.contact) { R.contact = true; ev('contact', Math.hypot(ball.vx, ball.vz)); }
+        if (p.standing && !R.contact) {
+          R.contact = true; ev('contact', Math.hypot(ball.vx, ball.vz));
+          if (m.boom) boom(ball.x, ball.z);
+        }
         if (p.standing) hit(p, j, m.lead);
         break;
       }
@@ -163,7 +186,7 @@ export function step(L, dt, ev) {
   const P = L.pins;
   for (let i = 0; i < P.length; i++) for (let k = i + 1; k < P.length; k++) {
     const a = P[i], b = P[k];
-    if (a.gone || b.gone || airborne(a) !== airborne(b)) continue;
+    if (a.gone || b.gone || !meets(a, b)) continue;
     if (a.standing && b.standing && Math.hypot(a.vx, a.vz) + Math.hypot(b.vx, b.vz) < 0.05) continue;
     if (Math.abs(a.x - b.x) > 0.8 || Math.abs(a.z - b.z) > 0.8) continue;
     let j = 0;
@@ -171,7 +194,7 @@ export function step(L, dt, ev) {
       j = collide(a, b, ar, br, pinM, pinM, ax, az, bx, bz);
       if (j) break outer;
     }
-    if (j) { if (j > 0.15) ev('pin', j / 4, a.x); if (a.standing) hit(a, j, m.lead * 1.1); if (b.standing) hit(b, j, m.lead * 1.1); }
+    if (j) { if (j > 0.15) ev('pin', j / 4, a.x); if (a.standing) hit(a, j, m.lead * PIN_PIN * (m.domino ? 0.3 : 1)); if (b.standing) hit(b, j, m.lead * PIN_PIN * (m.domino ? 0.3 : 1)); }
   }
   for (const p of P) if (!p.gone) wallClamp(p); // pin-on-pin pushes must not shove a pin back into a wall
   const moving = P.some(p => !p.gone && (Math.hypot(p.vx, p.vz) > 0.05 || p.y > 0.001 || p.vy !== 0 || (!p.standing && p.tilt < 1)));

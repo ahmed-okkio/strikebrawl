@@ -157,6 +157,22 @@ export const sfx = {
     [523, 659, 784].forEach(f => tone(f, { type: 'square', t: 0.55, decay: 0.5, vol: 0.05, lp: 3000 }));
   },
 
+  boom() {
+    if (!ok()) return;
+    tone(55, { decay: 0.7, vol: 0.8, to: 26, verb: 0.5 });
+    noise({ decay: 0.6, vol: 0.6, type: 'lowpass', freq: 1400, to: 120, verb: 0.6 });
+    noise({ t: 0.02, decay: 0.15, vol: 0.3, freq: 3000, Q: 0.7 });
+  },
+  rocket() {
+    if (!ok()) return;
+    noise({ attack: 0.04, decay: 0.7, vol: 0.35, freq: 300, to: 2600, Q: 1 });
+    tone(180, { type: 'sawtooth', decay: 0.5, vol: 0.08, to: 520, lp: 1500 });
+  },
+  slip() { // cartoon "wheee"
+    if (!ok()) return;
+    tone(500, { type: 'triangle', decay: 0.35, vol: 0.2, to: 1400 });
+    tone(1400, { type: 'triangle', t: 0.3, decay: 0.3, vol: 0.12, to: 400 });
+  },
   yourTurn() { // bright arcade "ding-ding" so you notice even when looking away
     if (!ok()) return;
     noise({ attack: 0.12, decay: 0.12, vol: 0.12, freq: 600, to: 5000, Q: 1.2 });
