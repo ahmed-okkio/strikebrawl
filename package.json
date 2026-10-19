@@ -1,0 +1,59 @@
+{
+  "name": "strike-brawl",
+  "productName": "Strike Brawl",
+  "version": "1.1.0",
+  "description": "Chaotic party bowling with augments and sabotage.",
+  "type": "module",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node test.js",
+    "dist": "electron-builder --win",
+    "release": "electron-builder --win --publish always"
+  },
+  "dependencies": {
+    "@fontsource/lilita-one": "^5.3.0",
+    "@fontsource/nunito": "^5.3.0",
+    "electron-updater": "^6.8.9",
+    "peerjs": "^1.5.5",
+    "three": "^0.170.0"
+  },
+  "devDependencies": {
+    "electron": "^33.4.11",
+    "electron-builder": "^26.15.3"
+  },
+  "repository": "github:ahmed-okkio/strikebrawl",
+  "build": {
+    "appId": "com.ahmedokkio.strikebrawl",
+    "productName": "StrikeBrawl",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "**/*",
+      "build/icon.png",
+      "!test.js",
+      "!playtest.cjs",
+      "!nettest.cjs",
+      "!make-icon.cjs",
+      "!dist/**",
+      "!release/**"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "build/icon.ico"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "artifactName": "StrikeBrawl-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "ahmed-okkio",
+      "repo": "strikebrawl",
+      "releaseType": "release"
+    },
+    "asar": false
+  }
+}

@@ -1,0 +1,188 @@
+// Per-lane bowling physics. Pure data + functions, no rendering: only the host (or local game) runs this.
+// Coordinates are lane-local metres: x across the lane (0 = centre), z down the lane (pins at negative z), y up.
+// Motion is mostly planar; pins get a simple vertical hop + tumble so big hits send them flying.
+
+export const LANE_HALF = 0.53, GUTTER_R = 0.12, GUTTER_X = LANE_HALF + GUTTER_R;
+export const KICKBACK_X = 0.84; // inner face of the side walls around the pin deck
+export const DECK_Z = -16.9;    // kickback walls start here
+export const HEAD_Z = -18.3, PIT_Z = -19.6, PIT_BACK = -20.35, ROW_DZ = 0.264, PIN_DX = 0.305;
+export const BALL_R = 0.11, PIN_R = 0.06, PIN_LEN = 0.38, BALL_M = 7, PIN_M = 1.5;
+export const START_Z = 0.4, WALL_Z = -13;
+const G = 9.8;
+
+export function rackSpots() {
+  const s = [];
+  for (let r = 0; r < 4; r++) for (let k = 0; k <= r; k++) s.push([(k - r / 2) * PIN_DX, HEAD_Z - r * ROW_DZ]);
+  return s;
+}
+
+const freshPin = () => ({ x: 0, z: 0, y: 0, vx: 0, vz: 0, vy: 0, standing: true, gone: false, tilt: 0, tumble: 0, spin: 0, dx: 0, dz: 1 });
+export function createLane() {
+  return {
+    phase: 'idle', // idle | aim | roll | result
+    ball: { x: 0, z: START_Z, y: 0, vx: 0, vz: 0, r: BALL_R, m: BALL_M, spin: 0, active: false, gutter: false, visible: true },
+    pins: rackSpots().map(freshPin),
+    roll: null,
+  };
+}
+
+export function rack(L) {
+  rackSpots().forEach(([x, z], i) => Object.assign(L.pins[i], freshPin(), { x, z }));
+}
+export function sweep(L) {
+  for (const p of L.pins) { if (!p.standing) p.gone = true; p.vx = p.vz = 0; }
+}
+export const standingCount = L => L.pins.filter(p => p.standing).length;
+
+// Launch the ball. m = the thrower's modifiers (see mods() in game.js).
+export function launch(L, { x, angle, spin, power }, m) {
+  const speed = (5.5 + 4 * power) * m.speed;
+  Object.assign(L.ball, { x, z: START_Z, y: 0, vx: Math.sin(angle) * speed, vz: -Math.cos(angle) * speed, spin, active: true, gutter: false, visible: true });
+  L.roll.m = m;
+  L.roll.t = 0; L.roll.settle = 0;
+  L.roll.standingBefore = standingCount(L);
+}
+
+function collide(a, b, ra, rb, ma, mb, ax, az, bx, bz) {
+  const dx = bx - ax, dz = bz - az, d = Math.hypot(dx, dz);
+  if (d >= ra + rb || d === 0) return 0;
+  const nx = dx / d, nz = dz / d;
+  const rel = (a.vx - b.vx) * nx + (a.vz - b.vz) * nz;
+  const push = (ra + rb - d) / (1 / ma + 1 / mb);
+  a.x -= nx * push / ma; a.z -= nz * push / ma; b.x += nx * push / mb; b.z += nz * push / mb;
+  if (rel <= 0) return 0;
+  const j = 1.7 * rel / (1 / ma + 1 / mb);
+  a.vx -= j / ma * nx; a.vz -= j / ma * nz; b.vx += j / mb * nx; b.vz += j / mb * nz;
+  return j;
+}
+
+// A standing pin is one circle; a lying pin is a chain of circles along its body (belly, neck, head),
+// so a ball or pin can't pass through its ends.
+const LYING = [[0.1, 0.06], [0.22, 0.045], [0.33, 0.035]];
+function circles(p) {
+  if (p.standing) return [[p.x, p.z, PIN_R]];
+  const s = Math.sin(p.tilt * Math.PI / 2);
+  return LYING.map(([o, r]) => [p.x + p.dx * o * s, p.z + p.dz * o * s, r]);
+}
+const airborne = p => p.y > 0.25;
+
+// Advance one lane by dt. ev(name, ...args) reports sound/particle events. Returns true once everything has settled.
+export function step(L, dt, ev) {
+  const R = L.roll, m = R.m, ball = L.ball, pinM = PIN_M * m.lead;
+  R.t += dt;
+  const knock = (p, dx, dz, dv = 0) => {
+    if (!p.standing) return;
+    const d = Math.hypot(dx, dz) || 1;
+    p.standing = false; p.dx = dx / d; p.dz = dz / d;
+    if (dv > 2.5 && Math.random() < 0.65) { // a hard hit launches the pin
+      p.vy = Math.min(3.2, dv * 0.28) * (0.5 + Math.random() * 0.5);
+      p.spin = (Math.random() < 0.5 ? -1 : 1) * (8 + Math.random() * 14);
+    }
+    ev('knock', p.x, p.z);
+  };
+  // kickback walls around the deck, lane dividers elsewhere: keep the whole pin (base and head) inside
+  const wallClamp = p => {
+    const side = p.z < DECK_Z ? KICKBACK_X : GUTTER_X + 0.1;
+    const s = p.standing ? 0 : Math.sin(p.tilt * Math.PI / 2) * PIN_LEN;
+    const xs = [p.x - PIN_R, p.x + PIN_R, p.x + p.dx * s];
+    const over = Math.max(...xs) - side, under = -side - Math.min(...xs);
+    if (over > 0) { p.x -= over; p.vx = -Math.abs(p.vx) * 0.5; if (p.standing) knock(p, -1, p.vz); }
+    if (under > 0) { p.x += under; p.vx = Math.abs(p.vx) * 0.5; if (p.standing) knock(p, 1, p.vz); }
+    if (p.y < 0 && p.z > PIT_Z) { p.z = PIT_Z - 0.001; p.vz = Math.min(p.vz, 0); } // a pin down in the pit can't climb back out
+  };
+  const hit = (p, j, lead) => {
+    const dv = j / pinM;
+    if (dv > 0.9 * lead || (m.lucky && dv > 0.15 && Math.random() < 0.6)) knock(p, p.vx, p.vz, dv);
+  };
+
+  if (ball.active) {
+    if (ball.z < -5 && ball.vz < 0) ball.vx += ball.spin * m.hook * dt;
+    if (m.grease) ball.vx += (Math.random() - 0.5) * 9 * m.grease * dt;
+    if (R.missile && ball.vz < 0) ball.vx += (R.steer || 0) * 2.2 * dt;
+    if (m.magnet && ball.z < -8) {
+      const live = L.pins.filter(p => p.standing);
+      if (live.length) {
+        const dist = p => Math.abs(p.x - ball.x) + Math.abs(p.z - ball.z);
+        const near = live.reduce((a, b) => dist(b) < dist(a) ? b : a);
+        ball.vx += Math.sign(near.x - ball.x) * 0.9 * m.magnet * dt;
+      }
+    }
+    ball.x += ball.vx * dt; ball.z += ball.vz * dt;
+    // a ball rolling back toward the bowler (off a wall) loses speed fast instead of coasting forever
+    const drag = ball.vz > 0 ? 2.5 : 0.05;
+    ball.vx *= 1 - drag * dt; ball.vz *= 1 - drag * dt;
+    if (!ball.gutter && ball.z > PIT_Z && Math.abs(ball.x) > LANE_HALF - (R.bumpers ? ball.r : 0)) {
+      if (R.bumpers) { ball.x = Math.sign(ball.x) * (LANE_HALF - ball.r); ball.vx = -ball.vx * 0.7; ev('bumper', ball.x); }
+      else if (Math.abs(ball.x) > LANE_HALF) { ball.gutter = true; ball.vx = 0; ball.x = Math.sign(ball.x) * GUTTER_X; ball.spin = 0; ev('gutter', ball.x); }
+    }
+    if (R.wall && !ball.gutter && ball.vz < 0 && ball.z - ball.r < WALL_Z + 0.1 && ball.z > WALL_Z) {
+      const x0 = R.wall > 0 ? 0.02 : -LANE_HALF, x1 = R.wall > 0 ? LANE_HALF : -0.02;
+      if (ball.x + ball.r > x0 && ball.x - ball.r < x1) {
+        ball.z = WALL_Z + 0.1 + ball.r; // rest against the bricks, never inside them
+        ball.vz = -ball.vz * 0.18; ball.vx = ball.vx * 0.3 + (Math.random() - 0.5) * 0.4;
+        ev('wall', ball.x);
+      }
+    }
+    if (!ball.gutter) for (const p of L.pins) {
+      if (p.gone || airborne(p)) continue;
+      for (const [cx, cz, r] of circles(p)) {
+        const j = collide(ball, p, ball.r, r, ball.m, pinM, ball.x, ball.z, cx, cz);
+        if (!j) continue;
+        if (j > 0.3) ev('pin', j / 12, p.x); // resting contact is silent
+        if (p.standing && !R.contact) { R.contact = true; ev('contact', Math.hypot(ball.vx, ball.vz)); }
+        if (p.standing) hit(p, j, m.lead);
+        break;
+      }
+    }
+    if (ball.z < DECK_Z && Math.abs(ball.x) > KICKBACK_X - ball.r && !ball.gutter) { ball.x = Math.sign(ball.x) * (KICKBACK_X - ball.r); ball.vx = -ball.vx * 0.5; }
+    ball.y = ball.z < PIT_Z ? -Math.min(0.35, (PIT_Z - ball.z) * 0.6) : 0; // drop into the pit
+    if (ball.z > START_Z) { ball.z = START_Z; ball.vz = 0; }
+    if (ball.z < PIT_BACK || Math.hypot(ball.vx, ball.vz) < 0.2) {
+      ball.active = false; ball.visible = ball.z > PIT_BACK;
+      if (ball.z < PIT_BACK) ev('pit');
+    }
+  }
+
+  for (const p of L.pins) {
+    if (p.gone) continue;
+    p.x += p.vx * dt; p.z += p.vz * dt;
+    const grounded = p.y <= 0 && p.vy <= 0;
+    const f = Math.exp(-(p.standing ? 4 : grounded ? 1.6 : 0.2) * dt); p.vx *= f; p.vz *= f;
+    if (!p.standing) p.tilt = Math.min(1, p.tilt + dt * (2 + p.tilt * 8)); // accelerates like a real topple
+    // vertical hop + tumble
+    const floor = p.z < PIT_Z ? -0.35 : 0;
+    if (!grounded || p.y > floor) {
+      p.vy -= G * dt; p.y += p.vy * dt; p.tumble += p.spin * dt;
+      if (p.y <= floor) { p.y = floor; if (p.vy < -1.2) { p.vy = -p.vy * 0.3; p.spin *= 0.5; ev('pin', 0.15, p.x); } else { p.vy = 0; p.spin = 0; } }
+    }
+    if (p.vy === 0 && p.spin === 0) p.tumble += (Math.round(p.tumble / Math.PI) * Math.PI - p.tumble) * Math.min(1, dt * 10); // settle lying flat
+    wallClamp(p);
+    if (p.z < PIT_Z || Math.abs(p.x) > LANE_HALF + 0.02) knock(p, p.vx, p.vz);
+    if (p.z < PIT_BACK) { p.z = PIT_BACK; p.vz = 0; p.gone = true; } // behind the curtain
+  }
+  const P = L.pins;
+  for (let i = 0; i < P.length; i++) for (let k = i + 1; k < P.length; k++) {
+    const a = P[i], b = P[k];
+    if (a.gone || b.gone || airborne(a) !== airborne(b)) continue;
+    if (a.standing && b.standing && Math.hypot(a.vx, a.vz) + Math.hypot(b.vx, b.vz) < 0.05) continue;
+    if (Math.abs(a.x - b.x) > 0.8 || Math.abs(a.z - b.z) > 0.8) continue;
+    let j = 0;
+    outer: for (const [ax, az, ar] of circles(a)) for (const [bx, bz, br] of circles(b)) {
+      j = collide(a, b, ar, br, pinM, pinM, ax, az, bx, bz);
+      if (j) break outer;
+    }
+    if (j) { if (j > 0.15) ev('pin', j / 4, a.x); if (a.standing) hit(a, j, m.lead * 1.1); if (b.standing) hit(b, j, m.lead * 1.1); }
+  }
+  for (const p of P) if (!p.gone) wallClamp(p); // pin-on-pin pushes must not shove a pin back into a wall
+  const moving = P.some(p => !p.gone && (Math.hypot(p.vx, p.vz) > 0.05 || p.y > 0.001 || p.vy !== 0 || (!p.standing && p.tilt < 1)));
+  if (!ball.active && !moving) R.settle += dt; else R.settle = 0;
+  if (R.settle > 0.6 || R.t > 10) {
+    if (R.quake && !R.quaked) {
+      R.quaked = true; R.settle = 0; ev('quake');
+      for (const p of P) if (p.standing && Math.random() < 0.6) { const a = Math.random() * 6.28; p.vx = Math.cos(a) * 0.5; p.vz = Math.sin(a) * 0.5; knock(p, p.vx, p.vz); }
+      return false;
+    }
+    return true;
+  }
+  return false;
+}
