@@ -20,14 +20,17 @@ const $ = id => document.getElementById(id);
 let updating = false;
 addEventListener('keydown', e => { if (updating) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
 window.__update = s => {
-  updating = !s.failed;
+  updating = !s.done;
   $('update').classList.toggle('hidden', !updating);
-  if (s.v) $('updver').textContent = `v${s.v}`;
+  $('update').classList.toggle('checking', !!s.checking);
+  if (s.checking) { $('updtitle').textContent = 'Checking for updates…'; $('updtxt').textContent = 'One moment'; return; }
+  if (s.v) $('updtitle').textContent = `Updating to v${s.v}`;
   $('updfill').style.width = `${s.p ?? 0}%`;
   const mb = n => (n / 1048576).toFixed(1);
   $('updtxt').textContent = s.installing ? 'Installing… the game will restart by itself'
     : s.total ? `${mb(s.got)} / ${mb(s.total)} MB · ${Math.floor(s.p)}%` : 'Starting download…';
 };
+if (new URLSearchParams(location.search).get('u') === '1') window.__update({ checking: true });
 const clamp = THREE.MathUtils.clamp;
 const pick = a => a[Math.floor(Math.random() * a.length)];
 
@@ -192,7 +195,8 @@ function applyTarget(dt) {
   const [sx, sz, br, bg, bv, ba, bvx, bvz, by] = s.b;
   const bx = sx + (ba ? bvx * age : 0), bz = sz + (ba ? bvz * age : 0);
   const jump = Math.abs(bz - L.ball.z) > 3; // a new throw or reset: snap instead of sliding
-  if (!(mine && L.phase === 'aim')) {
+  // on my turn my own aim rules: a snapshot sent before the turn changed would drag in the previous bowler's position
+  if (!mine) {
     L.ball.x = jump ? bx : lerp(L.ball.x, bx);
     [L.aim.x, L.aim.disp, L.aim.spin, L.aim.power] = s.a;
   }

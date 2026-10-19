@@ -111,6 +111,8 @@
   #update { z-index: 1000; background: rgba(21,18,58,.92); }
   #update .bar { width: min(420px, 80vw); height: 22px; margin: 16px auto 10px; border: 3px solid var(--ink); border-radius: 99px; background: #e9e4ff; overflow: hidden; }
   #updfill { height: 100%; width: 0; background: linear-gradient(90deg, var(--gold), #ff8a00); transition: width .3s; }
+  #update.checking #updfill { width: 30% !important; animation: scan 1.1s ease-in-out infinite alternate; }
+  @keyframes scan { from { transform: translateX(-10%); } to { transform: translateX(245%); } }
   #updtxt { color: var(--muted); font-size: 14px; }
   .rules { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; text-align: left; font-size: 14px; color: #4b4580; margin-top: 14px; max-width: 340px; }
   .rules b { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #fff; font-size: 16px; }
@@ -234,7 +236,7 @@
 </div>
 
 <div id="update" class="overlay hidden">
-  <div class="panel chunk"><h3 class="waith">Updating to <span id="updver"></span></h3><div class="bar"><div id="updfill"></div></div><div id="updtxt">Starting download…</div></div>
+  <div class="panel chunk"><h3 class="waith" id="updtitle">Checking for updates…</h3><div class="bar"><div id="updfill"></div></div><div id="updtxt">Starting download…</div></div>
 </div>
 <div id="draft" class="overlay hidden">
   <h2 id="drafttitle"></h2>

@@ -15,7 +15,7 @@ module.exports = function playtest(win, outDir) {
   wc.on('console-message', (_e, _level, msg) => console.log('[page]', msg));
   wc.once('did-finish-load', async () => {
     if (process.env.PLAYTEST_NOPLAY) return;
-    win.focus(); wc.focus();
+    wc.focus(); // keyboard events go to the page; the window itself stays off-screen and unfocused
     await sleep(1500);
     let throws = 0, ultTried = false;
     for (;;) {
