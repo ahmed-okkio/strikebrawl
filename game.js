@@ -15,6 +15,19 @@ const TEST = AUTO || /^(playtest|nethost|netjoin)/.test(HASH); // scripted runs 
 const log = (...a) => TEST && console.log(...a);
 const SPEED = AUTO ? 3 : 1; // time scale, sped up for bot-only smoke runs
 const $ = id => document.getElementById(id);
+
+// Update in progress (driven by main.cjs): a full-screen bar that swallows all input until the installer takes over.
+let updating = false;
+addEventListener('keydown', e => { if (updating) { e.preventDefault(); e.stopImmediatePropagation(); } }, true);
+window.__update = s => {
+  updating = !s.failed;
+  $('update').classList.toggle('hidden', !updating);
+  if (s.v) $('updver').textContent = `v${s.v}`;
+  $('updfill').style.width = `${s.p ?? 0}%`;
+  const mb = n => (n / 1048576).toFixed(1);
+  $('updtxt').textContent = s.installing ? 'Installing… the game will restart by itself'
+    : s.total ? `${mb(s.got)} / ${mb(s.total)} MB · ${Math.floor(s.p)}%` : 'Starting download…';
+};
 const clamp = THREE.MathUtils.clamp;
 const pick = a => a[Math.floor(Math.random() * a.length)];
 

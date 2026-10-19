@@ -108,6 +108,10 @@
   .btn.sq { width: 40px; height: 40px; padding: 0; font-size: 24px; border-radius: 12px; background: #fff; }
   .btn.go { background: linear-gradient(#ffe27a, var(--gold)); font-size: 30px; padding: 12px 54px; margin-top: 12px; }
   .ver { font-size: 12px; color: rgba(255,255,255,.45); margin-top: 4px; letter-spacing: 1px; }
+  #update { z-index: 1000; background: rgba(21,18,58,.92); }
+  #update .bar { width: min(420px, 80vw); height: 22px; margin: 16px auto 10px; border: 3px solid var(--ink); border-radius: 99px; background: #e9e4ff; overflow: hidden; }
+  #updfill { height: 100%; width: 0; background: linear-gradient(90deg, var(--gold), #ff8a00); transition: width .3s; }
+  #updtxt { color: var(--muted); font-size: 14px; }
   .rules { display: grid; grid-template-columns: auto 1fr; gap: 8px 12px; text-align: left; font-size: 14px; color: #4b4580; margin-top: 14px; max-width: 340px; }
   .rules b { display: grid; place-items: center; width: 28px; height: 28px; border-radius: 9px; color: #fff; font-size: 16px; }
 
@@ -229,6 +233,9 @@
   <div class="panel chunk"><h3 class="waith">Drafting…</h3><div>Waiting for <span id="waitnames"></span> to pick an augment</div></div>
 </div>
 
+<div id="update" class="overlay hidden">
+  <div class="panel chunk"><h3 class="waith">Updating to <span id="updver"></span></h3><div class="bar"><div id="updfill"></div></div><div id="updtxt">Starting download…</div></div>
+</div>
 <div id="draft" class="overlay hidden">
   <h2 id="drafttitle"></h2>
   <div class="cards" id="cards"></div>

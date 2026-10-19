@@ -1,4 +1,4 @@
-const { app, BrowserWindow, dialog } = require('electron');
+const { app, BrowserWindow } = require('electron');
 const path = require('path');
 const fs = require('fs');
 
@@ -25,18 +25,19 @@ app.whenReady().then(() => {
   }, Number(process.env.SMOKE_MS || 6000));
 });
 
-// Downloads new versions from GitHub Releases in the background, then offers a restart.
+// Downloads new versions from GitHub Releases at launch. The page shows a blocking progress bar (window.__update),
+// then the installer runs silently and relaunches the game.
 function checkForUpdates(win) {
   const { autoUpdater } = require('electron-updater');
-  autoUpdater.on('error', () => {}); // offline or GitHub down: just play the current version
-  autoUpdater.on('update-downloaded', async info => {
-    const { response } = await dialog.showMessageBox(win, {
-      type: 'info', buttons: ['Restart now', 'Later'], defaultId: 0, cancelId: 1, title: 'Update ready',
-      message: `Strike Brawl ${info.version} is ready.`, detail: 'Restart now to update, or it installs when you next close the game.',
-    });
-    if (response === 0) autoUpdater.quitAndInstall();
+  const show = s => win.webContents.executeJavaScript(`window.__update?.(${JSON.stringify(s)})`).catch(() => {});
+  autoUpdater.on('update-available', i => show({ v: i.version, p: 0 }));
+  autoUpdater.on('download-progress', d => show({ p: d.percent, got: d.transferred, total: d.total }));
+  autoUpdater.on('error', () => show({ failed: true })); // offline or GitHub down: just play the current version
+  autoUpdater.on('update-downloaded', () => {
+    show({ p: 100, installing: true });
+    setTimeout(() => autoUpdater.quitAndInstall(true, true), 1200); // silent install, then reopen
   });
-  autoUpdater.checkForUpdates().catch(() => {});
+  win.webContents.once('did-finish-load', () => autoUpdater.checkForUpdates().catch(() => {}));
 }
 
 app.on('window-all-closed', () => app.quit());
