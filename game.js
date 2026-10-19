@@ -105,7 +105,7 @@ function runFx(e) {
     case 'release': sfx.release(); break;
     case 'boom': shake = 0.8; slowmo = SLOWMO; sfx.boom(); banner('KABOOM!'); emit(e.x, 0.2, e.z, 90, ['#ff8a00', '#ffc93c', '#ff4560', '#ffffff'], 4, 0.035); break;
     case 'rocket': sfx.rocket(); emit(e.x, 0.15, e.z + 0.2, 50, ['#ff8a00', '#ffc93c', '#ffffff'], 2.5, 0.03, 2); break;
-    case 'banana': sfx.slip(); toast('Slipped on a <b>Banana Peel</b>!', 'banana', kindColor('nerf')); emit(e.x, 0.1, e.z, 25, ['#ffe135', '#fff6a8'], 2, 0.03); break;
+    case 'banana': sfx.slip(); toast(`${pname(p)} slipped on a <b>Banana Peel</b>!`, 'banana', kindColor('nerf')); emit(e.x, 0.1, e.z, 25, ['#ffe135', '#fff6a8'], 2, 0.03); break;
     case 'mulligan': banner('MULLIGAN!', `${p.name} gets a do-over`); sfx.spare(); break;
     case 'toast': toast(e.html, e.ic, e.color); if (isMine(players[e.hurt])) sfx.sabotage(); break;
     case 'ult':
@@ -357,6 +357,7 @@ $('joinbtn').onclick = async () => {
   setStatus('Connecting…');
   try { net = await P2P.join(code, myName(), VERSION); } catch (e) { net = { mode: 'local', myId: 'local' }; return setStatus(e.message, true); }
   setStatus('');
+  gameId = -1; // the host numbers its games itself; ours must never match, or its first game is missed and we stay in the lobby
   const conn = net;
   net.on('msg', onHostMessage);
   net.on('close', () => { if (net === conn) leaveOnline('Lost connection to the host.'); });
@@ -590,7 +591,7 @@ const simEvent = (name, a, b) => {
   if (name === 'knock') fx({ e: 'knock', x: a, z: b });
   else if (name === 'pin') { if (a > 0.03) fx({ e: 'pin', s: a, x: b }); }
   else if (name === 'contact') fx({ e: 'contact', fast: L.roll.first && a > 5 });
-  else if (name === 'boom' || name === 'rocket' || name === 'banana') fx({ e: name, x: a, z: b });
+  else if (name === 'boom' || name === 'rocket' || name === 'banana') fx({ e: name, x: a, z: b, who: cur });
   else fx({ e: name, x: a });
 };
 
