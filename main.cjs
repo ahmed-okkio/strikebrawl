@@ -9,7 +9,7 @@ app.whenReady().then(() => {
   // SMOKE=<png path> runs a bots-only game, screenshots it, then quits (used for testing).
   const smoke = process.env.SMOKE;
   const win = new BrowserWindow({
-    width: 1400, height: 860, backgroundColor: '#15123a', autoHideMenuBar: true,
+    width: 1400, height: 860, backgroundColor: '#15123a', autoHideMenuBar: true, show: !(smoke || process.env.PLAYTEST), // test runs stay off-screen
     title: 'Strike Brawl', icon: path.join(__dirname, 'build', 'icon.png'), webPreferences: { backgroundThrottling: false },
   });
   const playtest = process.env.PLAYTEST; // dev only: visible scripted playthrough, see playtest.cjs
