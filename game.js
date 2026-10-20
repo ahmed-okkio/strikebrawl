@@ -3,7 +3,8 @@ import { sfx } from './audio.js';
 import { cumulative, total, frameDone, freshRack, marks } from './scoring.js';
 import { AUGS, ULTS, COLORS, BOT_NAMES, icon } from './data.js';
 import { LANE_HALF, HEAD_Z, BALL_R, BALL_M, START_Z, createLane, rack, sweep, standingCount, launch, step } from './sim.js';
-import { camera, render, views, syncLane, showAim, emit, updateParticles } from './scene.js';
+import { renderer, camera, render, views, syncLane, syncProps, showAim, emit, updateParticles } from './scene.js';
+import { LIVE, MOLE_LIFE, freshLive, liveOpen, liveInput, liveTick, liveBot, screenFx, clearScreen, drawScreen, screenBusy } from './live.js';
 import * as P2P from './net.js';
 
 const MAX_PLAYERS = 8;
@@ -11,7 +12,7 @@ const AIM_TIME = 20; // seconds a human gets to throw before the game throws for
 const HASH = location.hash.slice(1);
 const VERSION = new URLSearchParams(location.search).get('v') || 'dev';
 const AUTO = HASH === 'auto';
-const TEST = AUTO || /^(playtest|nethost|netjoin)/.test(HASH); // scripted runs log events to the console
+const TEST = AUTO || /^(playtest|nethost|netjoin|livetest)/.test(HASH); // scripted runs log events to the console
 const log = (...a) => TEST && console.log(...a);
 const SPEED = AUTO ? 3 : 1; // time scale, sped up for bot-only smoke runs
 const $ = id => document.getElementById(id);
@@ -52,14 +53,14 @@ const count = (list, id) => list.filter(a => a.id === id).length;
 function mods(p) {
   const b = id => count(p.buffs, id), n = id => count(p.nerfs, id);
   return {
-    radius: BALL_R * (1.3 ** b('boulder')) * (0.65 ** n('pebble')),
-    mass: BALL_M * 2 ** b('heavy'),
+    radius: n('pinbowl') ? 0.09 : BALL_R * (1.3 ** b('boulder')) * (0.65 ** n('pebble')),
+    mass: n('pinbowl') ? 5 : BALL_M * 2 ** b('heavy'),
     sway: 0.009 * (b('steady') ? 0.15 : 1) * 3 ** n('shaky'),
     hook: 0.38 * 2 ** b('hook'),
     lucky: b('lucky') > 0,
     magnet: b('magnet'),
     bumpers: b('bumpers') > 0,
-    speed: 1 + 0.3 * b('power'),
+    speed: (1 + 0.3 * b('power')) * (n('pinbowl') ? 0.85 : 1),
     meter: 2 ** n('butter'),
     grease: n('grease'),
     fog: n('fog') > 0,
@@ -73,9 +74,17 @@ function mods(p) {
     banana: n('banana') > 0,
     wide: n('wide') > 0,
     fuse: n('fuse') > 0,
+    split: b('split') > 0,
+    portal: b('portal') > 0,
+    moon: n('moon') > 0,
+    rebel: n('rebel') > 0,
+    pinbowl: n('pinbowl') > 0,
+    mega: n('mega') > 0,
   };
 }
 const swayNow = (aim, m) => m.sway * (Math.sin(aim.t * 2.1) + 0.5 * Math.sin(aim.t * 5.3));
+// the live card riding on this bowler this frame (at most one): { id, from, by }
+const liveOf = p => [...p.nerfs, ...p.buffs].find(a => LIVE[a.id]);
 const leader = (exclude) => players.filter(o => o !== exclude).sort((a, b) => total(b.frames) - total(a.frames) || Math.random() - 0.5)[0];
 
 // game-time delay: freezes while paused, never resolves once the game it belongs to is quit
@@ -125,7 +134,38 @@ function runFx(e) {
       else banner(String(e.n), e.n === 1 ? 'pin' : 'pins');
       break;
     case 'end': showEnd(); break;
+    // live cards
+    case 'ink': screenFx(e); sfx.scribble(); break;
+    case 'tomato': screenFx(e); sfx.splat(); break;
+    case 'horn': screenFx(e); sfx.horn(); shake = 0.4; banner('HONK!'); startle(); break;
+    case 'swat': sfx.swat(); break;
+    case 'mole': sfx.squeak(); emit(e.x, 0.05, e.z, 12, ['#5a3a1a', '#8a6a4a'], 1, 0.03); break;
+    case 'bonk': sfx.bonk(); shake = 0.25; banner('BONK!'); emit(e.x, 0.15, e.z, 20, ['#ffffff', '#ffe35a'], 2, 0.03); break;
+    case 'spill': sfx.splat(); break;
+    case 'oil': sfx.slip(); emit(e.x, 0.05, e.z, 14, ['#3a2a10', '#6b4a1a'], 1.2, 0.03); break;
+    case 'gull': sfx.squawk(); break;
+    case 'gullhit': sfx.squawk(); sfx.bonk(); shake = 0.3; banner('SQUAWK!'); emit(e.x, 0.2, e.z, 30, ['#ffffff', '#dddddd'], 2.5, 0.03); break;
+    case 'shuffle': sfx.pop(); emit(e.x, 0.2, e.z, 10, ['#ff8a00', '#ffffff'], 1, 0.025); break;
+    case 'hype': sfx.hype(); banner('HYPED!', '+20% power'); emit(L.ball.x, 0.3, L.ball.z, 50, COLORS, 3, 0.03, 4); break;
+    case 'sweep': sfx.brush(); break;
+    case 'warp': sfx.warp(); emit(e.x, 0.15, e.z, 40, ['#3df0ff', '#ff8a00', '#ffffff'], 2, 0.03); break;
+    case 'portal': sfx.warp(); break;
+    case 'split': sfx.pop(); banner('SPLIT!'); emit(e.x, 0.15, e.z, 30, [p?.color || '#fff', '#ffffff'], 2, 0.03); break;
+    case 'rebel': sfx.squeak(); toast(`${pname(p)}'s pins are running away!`, 'rebel', kindColor('nerf')); break;
+    case 'vote': showVote(e); break;
+    case 'voted':
+      $('vote').classList.add('hidden');
+      toast(`The crowd chose <b>${AUGS[e.win].name}</b> for ${pname(players[e.target])}'s next turn`, e.win, '#8b5cff');
+      sfx.sabotage();
+      break;
   }
+}
+// Air Horn: the bowler's power meter jumps mid-charge, or they flinch their aim
+function startle() {
+  if (!myTurn()) return;
+  const a = L.aim, m = mods(players[cur]);
+  if (a.charging) a.t0 -= (0.3 + Math.random() * 0.5) / (1.1 * m.meter);
+  else a.angle = clamp(a.angle + pick([-1, 1]) * 0.025, -0.05, 0.05);
 }
 function confetti() {
   for (const s of [-1, 1]) emit(s * 0.5, 0.2, HEAD_Z + 0.6, 90, COLORS.concat('#ffffff'), 4.5, 0.035, 5);
@@ -136,14 +176,15 @@ let metaDirty = false, lastSnap = 0, lastPins = '';
 const syncMeta = () => { metaDirty = true; renderHUD(); };
 const r3 = v => Math.round(v * 1000) / 1000;
 function meta() {
-  return { t: 'm', gid: gameId, frame, cur, phase, turn, pending: [...pending], players: players.map(({ name, color, bot, owner, frames, buffs, nerfs, ult, ultUsed, ultArmed, wallNext }) => ({ name, color, bot, owner, frames, buffs, nerfs, ult, ultUsed, ultArmed, wallNext })) };
+  return { t: 'm', gid: gameId, frame, cur, phase, turn, pending: [...pending], players: players.map(({ name, color, bot, owner, frames, buffs, nerfs, ult, ultUsed, ultArmed, wallNext, bet }) => ({ name, color, bot, owner, frames, buffs, nerfs, ult, ultUsed, ultArmed, wallNext, bet })) };
 }
 function snapshot() {
   const b = L.ball, R = L.roll || {};
-  const pins = L.pins.map(p => [r3(p.x), r3(p.z), +p.standing, +p.gone, r3(p.tilt), r3(p.dx), r3(p.dz), r3(p.vx), r3(p.vz), r3(p.y), r3(p.tumble)]);
+  const pins = L.pins.map(p => [r3(p.x), r3(p.z), +p.standing, +p.gone, r3(p.tilt), r3(p.dx), r3(p.dz), r3(p.vx), r3(p.vz), r3(p.y), r3(p.tumble), p.s]);
   const key = JSON.stringify(pins), changed = key !== lastPins; lastPins = key;
   return { t: 's', lp: L.phase, b: [r3(b.x), r3(b.z), r3(b.r), +b.gutter, +b.visible, +b.active, r3(b.vx), r3(b.vz), r3(b.y)], a: [r3(L.aim.x), r3(L.aim.disp), r3(L.aim.spin), r3(L.aim.power)],
-    w: R.wall || 0, bu: +!!R.bumpers, tm: Math.ceil(L.timer || 0), ts: r3(timeScale), p: changed ? pins : undefined };
+    w: R.wall || 0, bu: +!!R.bumpers, tm: Math.ceil(L.timer || 0), ts: r3(timeScale), p: changed ? pins : undefined,
+    lv: L.live || undefined, x: L.extra.length ? L.extra.map(q => [r3(q.x), r3(q.z), r3(q.r), +q.gutter, +q.visible, +q.active, r3(q.vx), r3(q.vz), r3(q.y)]) : undefined };
 }
 function flushMeta() { if (metaDirty) { net.broadcast(meta()); metaDirty = false; } }
 function hostTick(now) {
@@ -168,18 +209,18 @@ function onHostMessage(msg) {
       ({ frame, cur, phase, turn } = msg);
       players = msg.players;
       pending.clear(); msg.pending.forEach(i => pending.add(i));
-      if (newTurn) { L.aim = freshAim(); views[0].setOwner(players[cur].name, players[cur].color); }
+      if (newTurn) { L.aim = freshAim(); ctlLocal = {}; views[0].setOwner(players[cur].name, players[cur].color); }
       renderHUD();
       break;
     }
     case 's': {
       target = msg; msg.at = performance.now();
       // pins are only sent when they change, so apply them now; a later snapshot without pins must not drop them
-      if (msg.p) { pinsAt = msg.at; msg.p.forEach((q, i) => Object.assign(L.pins[i], { tx: q[0], tz: q[1], standing: !!q[2], gone: !!q[3], ttilt: q[4], dx: q[5], dz: q[6], tvx: q[7], tvz: q[8], ty: q[9], ttumble: q[10] })); }
+      if (msg.p) { pinsAt = msg.at; msg.p.forEach((q, i) => Object.assign(L.pins[i], { tx: q[0], tz: q[1], standing: !!q[2], gone: !!q[3], ttilt: q[4], dx: q[5], dz: q[6], tvx: q[7], tvz: q[8], ty: q[9], ttumble: q[10], s: q[11] ?? 1 })); }
       break;
     }
     case 'fx': msg.a.forEach(runFx); break;
-    case 'draft': showDraft(players[msg.me], msg.offer).then(r => net.send({ t: 'pick', did: msg.did, ...r })); break;
+    case 'draft': showDraft(players[msg.me], msg.offer, msg.extra).then(r => net.send({ t: 'pick', did: msg.did, ...r })); break;
   }
 }
 // Dead reckoning: extrapolate the last snapshot along its velocity, then ease the small error away.
@@ -204,6 +245,13 @@ function applyTarget(dt) {
   Object.assign(L.ball, { r: br, gutter: !!bg, visible: !!bv, active: !!ba, vx: bvx, vz: bvz, y: by });
   L.roll = { ...(L.roll || {}), wall: s.w, bumpers: !!s.bu };
   L.timer = s.tm;
+  L.extra = (s.x || []).map(([x, z, r, g, v, a, vx, vz, y]) => ({ x: x + (a ? vx * age : 0), z: z + (a ? vz * age : 0), r, gutter: !!g, visible: !!v, y }));
+  L.live = s.lv || null;
+  // the card I'm controlling shows my own mouse straight away, not the host's echo
+  const X = controlling();
+  if (X && ctlLocal.fly && X.fly && !X.fly.stun) Object.assign(X.fly, ctlLocal.fly);
+  if (X && ctlLocal.fake != null && X.fake != null) X.fake = ctlLocal.fake;
+  if (X && ctlLocal.cam) X.cam = ctlLocal.cam;
   const pinAge = Math.min(0.15, (performance.now() - pinsAt) / 1000) * (s.ts ?? 1);
   for (const p of L.pins) if (p.tx !== undefined) {
     const px = p.tx + p.tvx * pinAge, pz = p.tz + p.tvz * pinAge, snap = Math.abs(pz - p.z) > 1;
@@ -214,10 +262,21 @@ function applyTarget(dt) {
 }
 
 // host side: what clients may ask for
+const netLive = {}; // test runs: live-card inputs received from guests
 function onClientMessage(id, msg) {
   if (msg.t === 'pick') return draftWaiters.get(msg.did)?.(id, msg);
+  if (phase === 'menu') return;
+  const owns = q => q?.owner === id;
+  if (msg.t === 'live') {
+    if (TEST) netLive[`${L.live?.id}:${msg.a}`] = (netLive[`${L.live?.id}:${msg.a}`] || 0) + 1;
+    return L.live && owns(players[L.live.by]) && liveInput(L, msg, fx, players[L.live.by].color);
+  }
+  if (msg.t === 'vote') return castVote(owns, msg.id, msg.c);
+  if (msg.t === 'bet') return owns(players[msg.by]) && placeBet(msg.by, msg.c);
   const p = players[cur];
-  if (!p || p.owner !== id || phase === 'menu') return;
+  if (!owns(p)) return;
+  if (msg.t === 'swat') swat();
+  if (msg.t === 'portal') placePortal(+msg.x, +msg.z);
   if (msg.t === 'aim' && L.phase === 'aim') { L.aim.x = clamp(+msg.x || 0, -LANE_HALF, LANE_HALF); L.aim.disp = +msg.d || 0; L.aim.spin = clamp(+msg.s || 0, -1, 1); L.aim.power = clamp(+msg.p || 0, 0, 1); }
   if (msg.t === 'throw') throwBall(msg);
   if (msg.t === 'ult') tryUlt();
@@ -238,7 +297,9 @@ function toast(html, ic, color) {
   while ($('feed').children.length > 5) $('feed').lastChild.remove();
   log(t.textContent);
 }
-const kindColor = k => k === 'buff' ? '#1fbf75' : '#ff4560';
+const KINDS = { buff: ['#1fbf75', 'BUFF'], nerf: ['#ff4560', 'SABOTAGE'], live: ['#ff8a00', 'LIVE SABOTAGE'], help: ['#3d8bff', 'LIVE ASSIST'], bet: ['#e0a800', 'BET'] };
+const kindColor = k => KINDS[k][0];
+const BETS = { X: 'STRIKE', '/': 'SPARE', open: 'OPEN FRAME' };
 
 function renderScoreboard() {
   const sb = $('scoreboard');
@@ -246,8 +307,8 @@ function renderScoreboard() {
   let h = '<table><tr><th></th>' + [...Array(10)].map((_, i) => `<th>${i + 1}</th>`).join('') + '<th>TOTAL</th></tr>';
   players.forEach((p, i) => {
     const cum = cumulative(p.frames);
-    const mini = p.buffs.map(a => `<b class="buff" title="${AUGS[a.id].name}">${icon(a.id)}</b>`).join('')
-      + p.nerfs.map(a => `<b class="nerf" title="${AUGS[a.id].name}">${icon(a.id)}</b>`).join('');
+    const mini = [...p.buffs, ...p.nerfs].map(a => `<b class="${AUGS[a.id].kind}" title="${AUGS[a.id].name}">${icon(a.id)}</b>`).join('')
+      + (p.bet ? `<b class="bet" title="Hot Tip on ${players[p.bet.on]?.name}">${icon('bet')}</b>` : '');
     const tag = p.bot ? '<span class="cpu">CPU</span>' : net.mode !== 'local' && isMine(p) ? '<span class="cpu you">YOU</span>' : '';
     h += `<tr class="${i === cur && phase !== 'end' ? 'cur' : ''}" style="--pc:${p.color}"><td class="who"><span class="avatar">${initial(p)}</span><span class="nm">${p.name}</span>${tag}<span class="mini">${mini}</span></td>`;
     for (let f = 0; f < 10; f++) {
@@ -271,8 +332,8 @@ function renderTurn() {
   $('turn').style.setProperty('--pc', p.color);
   $('turn').innerHTML = `<div class="top"><span class="avatar">${initial(p)}</span><div><h2>${p.name}${who}</h2>
     <div class="meta">Frame ${frame + 1} · Ball ${(p.frames[frame]?.length ?? 0) + 1}<span id="clock"></span></div></div></div>`
-    + `<div class="chips">${p.buffs.map(a => chip('buff', a.id, AUGS[a.id].name)).join('')}`
-    + p.nerfs.map(a => chip('nerf', a.id, AUGS[a.id].name + (a.id === 'wind' ? (a.dir > 0 ? ' →' : ' ←') : ''), ` <small>· ${a.from}</small>`)).join('')
+    + `<div class="chips">${p.buffs.map(a => chip(AUGS[a.id].kind, a.id, AUGS[a.id].name, a.from ? ` <small>· ${a.from}</small>` : '')).join('')}`
+    + p.nerfs.map(a => chip(AUGS[a.id].kind, a.id, AUGS[a.id].name + (a.id === 'wind' ? (a.dir > 0 ? ' →' : ' ←') : ''), ` <small>· ${a.from}</small>`)).join('')
     + (L.roll?.wall ? chip('nerf', 'wall', 'Brick Wall') : '') + '</div>';
   const u = ULTS[p.ult], btn = $('ultbtn');
   btn.innerHTML = `<span class="orb">${icon(p.ult)}<span class="key">U</span></span><span><div class="lbl">${p.ultArmed ? 'ARMED' : p.ultUsed ? 'ULTIMATE USED' : 'ULTIMATE · READY'}</div><div class="nm">${u.name}</div><div class="ds">${u.desc}</div></span>`;
@@ -280,6 +341,39 @@ function renderTurn() {
   btn.classList.toggle('armed', !!p.ultArmed);
   $('rev').classList.toggle('hidden', !m.reverse);
   for (const id of ['shot', 'keys']) $(id).classList.toggle('hidden', !mine || phase !== 'aim');
+  renderBet();
+}
+// Hot Tip: a local player holding a bet on this bowler calls it before their first ball
+function renderBet() {
+  const p = players[cur], el = $('bet');
+  const q = phase === 'aim' && !p.frames[frame]?.length ? players.find(o => isMine(o) && o.bet?.on === cur && !o.bet.call) : null;
+  el.classList.toggle('hidden', !q);
+  if (!q) return;
+  const by = players.indexOf(q);
+  el.innerHTML = `<div class="lbl">HOT TIP · ${pname(q)}</div><h4>Call ${pname(p)}'s frame</h4><div class="opts">${Object.entries(BETS).map(([c, n]) => `<button class="btn" data-c="${c}">${n}</button>`).join('')}</div>`;
+  el.querySelectorAll('button').forEach(b => b.onclick = () => {
+    el.querySelectorAll('button').forEach(x => { x.disabled = true; x.classList.toggle('on', x === b); });
+    if (auth()) placeBet(by, b.dataset.c); else net.send({ t: 'bet', by, c: b.dataset.c });
+  });
+}
+// the live-card panel: what's riding on this ball, who holds it, ammo, and (for the holder) how to use it
+let liveKey = '';
+function renderLive() {
+  const X = L.live, c = LIVE[X?.id], el = $('live'), q = c && players[X.by];
+  const show = !!q && phase !== 'menu' && (L.phase === 'aim' || L.phase === 'roll');
+  el.classList.toggle('hidden', !show);
+  document.body.classList.toggle('ctl', !!controlling());
+  if (!show) { liveKey = ''; return; }
+  const mine = isMine(q), open = liveOpen(L), key = `${X.id}|${X.by}|${mine}|${open}`;
+  if (key !== liveKey) {
+    liveKey = key;
+    const a = AUGS[X.id];
+    el.style.setProperty('--pc', kindColor(a.kind));
+    el.innerHTML = `<b class="ic">${icon(X.id)}</b><div><div class="lbl">${KINDS[a.kind][1]} · ${pname(q)}</div><div class="nm">${a.name}</div>`
+      + `<div class="bar"><i id="livefill"></i></div><div class="hint">${mine ? (open ? c.hint : c.phase === 'roll' ? 'Get ready: this works once the ball is rolling' : '') : ''}</div></div>`;
+  }
+  const f = c.meter ? X.meter : c.ammo ? X.ammo / c.ammo : 1;
+  $('livefill').style.width = `${clamp(f, 0, 1) * 100}%`;
 }
 function renderHUD() {
   if (phase === 'menu' || !players.length) return;
@@ -309,6 +403,7 @@ $('rules').innerHTML = [
   ['pin', '#3d8bff', 'Up to 8 bowlers, 10 frames, real bowling scoring.'],
   ['cards', '#1fbf75', 'Draft a fresh augment every frame. Buff yourself or sabotage a rival. They expire when the frame ends.'],
   ['star', '#8b5cff', 'One Ultimate per game. Timing is everything.'],
+  ['eye', '#ff8a00', 'Live cards: mess with a rival in real time, with your mouse, while they bowl.'],
 ].map(([ic, c, t]) => `<b style="background:${c}">${icon(ic)}</b><span>${t}</span>`).join('');
 try { $('pname').value = localStorage.getItem('sb-name') || ''; } catch {}
 const myName = () => {
@@ -413,7 +508,9 @@ function setPaused(v) {
   if (v) { sfx.chargeStop(); keys.clear(); L.aim.charging = false; }
 }
 function quitToMenu() {
-  gameId++; setPaused(false); pending.clear(); target = null;
+  gameId++; setPaused(false); pending.clear(); target = null; vote = null;
+  L.live = null; L.extra = []; clearScreen();
+  for (const id of ['vote', 'bet', 'live']) $(id).classList.add('hidden');
   sfx.rollStop(); sfx.chargeStop();
   for (const id of ['hud', 'draft', 'end', 'lobby', 'wait']) $(id).classList.add('hidden');
   $('menu').classList.remove('hidden');
@@ -449,7 +546,7 @@ function startGame(seats) {
 async function beginFrame() {
   const id = gameId;
   // augments last one frame: everyone's are wiped and redrafted every frame
-  for (const p of players) { p.buffs = []; p.nerfs = []; }
+  for (const p of players) { p.buffs = []; p.nerfs = []; p.bet = null; }
   phase = 'draft'; L.phase = 'idle'; syncMeta();
   await runDrafts();
   if (id !== gameId) return;
@@ -460,66 +557,105 @@ async function beginFrame() {
 // Everyone drafts at once: bots instantly, remote players in parallel, hotseat players one after another.
 const draftWaiters = new Map();
 let draftSeq = 0;
-function offerFor() {
-  const sh = kind => Object.keys(AUGS).filter(i => AUGS[i].kind === kind).sort(() => Math.random() - 0.5);
-  const b = sh('buff'), n = players.length > 1 ? sh('nerf') : b.slice(3);
-  return [b[0], n[0], Math.random() < 0.5 ? b[1] : n[1]];
+// a buff, a sabotage (passive or live), and a wildcard from any kind; live cards only while a rival is free of one
+function offerFor(p) {
+  const sh = (...kinds) => Object.keys(AUGS).filter(i => kinds.includes(AUGS[i].kind)).sort(() => Math.random() - 0.5);
+  const b = sh('buff');
+  if (players.length < 2) return b.slice(0, 3);
+  const free = players.some(o => o !== p && !liveOf(o)), live = free ? ['live', 'help'] : [];
+  if (free && TEST && HASH.startsWith('nethost')) return sh('live', 'help').slice(0, 3); // net test: exercise live cards over the wire
+  const offer = [b[0], sh('nerf', ...(free ? ['live'] : []))[0]];
+  offer.push(sh('buff', 'nerf', 'bet', ...live).find(i => !offer.includes(i)));
+  return offer;
 }
 function botPick(p, offer) {
-  const id = pick(offer);
-  return { id, target: players.indexOf(leader(p)) };
+  const id = pick(offer), k = AUGS[id].kind, others = players.filter(o => o !== p);
+  return { id, target: players.indexOf(k === 'help' || k === 'bet' ? pick(others) : leader(p)) };
 }
 function applyPick(p, offer, r) {
   if (!r || !offer.includes(r.id)) r = botPick(p, offer);
-  const a = AUGS[r.id];
+  const a = AUGS[r.id], by = players.indexOf(p);
   if (a.kind === 'buff') {
     p.buffs.push({ id: r.id });
     fx({ e: 'toast', html: `${pname(p)} drafted <b>${a.name}</b>`, ic: r.id, color: kindColor(a.kind) });
+    return syncMeta();
+  }
+  // a bowler carries at most one live card; drafts run in parallel, so a pick can lose the race for its target
+  const ok = o => o && o !== p && !(LIVE[r.id] && liveOf(o));
+  const t = [players[r.target], leader(p), ...players].find(ok);
+  if (!t) {
+    const b = pick(Object.keys(AUGS).filter(i => AUGS[i].kind === 'buff'));
+    p.buffs.push({ id: b });
+    fx({ e: 'toast', html: `${pname(p)}'s <b>${a.name}</b> fizzled, so they get <b>${AUGS[b].name}</b>`, ic: b, color: kindColor('buff') });
+    return syncMeta();
+  }
+  const ti = players.indexOf(t);
+  if (a.kind === 'bet') {
+    p.bet = { on: ti, call: null };
+    fx({ e: 'toast', html: `${pname(p)} is betting on ${pname(t)}'s frame`, ic: r.id, color: kindColor(a.kind) });
+  } else if (a.kind === 'help') {
+    t.buffs.push({ id: r.id, from: p.name, by });
+    fx({ e: 'toast', html: `${pname(p)} will help ${pname(t)} with <b>${a.name}</b>`, ic: r.id, color: kindColor(a.kind) });
   } else {
-    let t = players[r.target];
-    if (!t || t === p) t = leader(p);
-    t.nerfs.push({ id: r.id, from: p.name, dir: pick([-1, 1]) }); // dir: which way a Crosswind blows
-    fx({ e: 'toast', html: `${pname(p)} hit ${pname(t)} with <b>${a.name}</b>`, ic: r.id, color: kindColor(a.kind), hurt: players.indexOf(t) });
+    t.nerfs.push({ id: r.id, from: p.name, by, dir: pick([-1, 1]) }); // dir: which way a Crosswind blows
+    fx({ e: 'toast', html: `${pname(p)} hit ${pname(t)} with <b>${a.name}</b>`, ic: r.id, color: kindColor(a.kind), hurt: ti });
   }
   syncMeta();
 }
 async function runDrafts() {
   const order = [...players].sort((a, b) => total(a.frames) - total(b.frames));
-  for (const p of order.filter(q => q.bot)) { const o = offerFor(); applyPick(p, o, botPick(p, o)); await wait(220); }
+  const picks = p => { const n = 1 + (p.bonus || 0); p.bonus = 0; return n; }; // a won Hot Tip = an extra pick
+  for (const p of order.filter(q => q.bot)) for (let k = picks(p); k--;) { const o = offerFor(p); applyPick(p, o, botPick(p, o)); await wait(220); }
   const humans = order.filter(q => !q.bot);
   const remote = humans.filter(q => net.mode === 'host' && q.owner !== 'host');
   const local = humans.filter(q => !remote.includes(q));
-  const remoteDone = Promise.all(remote.map(p => new Promise(done => {
-    const idx = players.indexOf(p), offer = offerFor(), did = ++draftSeq;
-    pending.add(idx);
+  const remotePick = (p, extra) => new Promise(done => {
+    const idx = players.indexOf(p), offer = offerFor(p), did = ++draftSeq;
     draftWaiters.set(did, (from, msg) => {
       if (from !== p.owner) return;
-      draftWaiters.delete(did); pending.delete(idx);
+      draftWaiters.delete(did);
       applyPick(p, offer, msg && { id: msg.id, target: msg.target });
       done();
     });
     flushMeta(); // the client needs the roster before it can show its cards
-    net.send(p.owner, { t: 'draft', did, me: idx, offer });
-  })));
+    net.send(p.owner, { t: 'draft', did, me: idx, offer, extra });
+  });
+  const remoteDone = Promise.all(remote.map(async p => {
+    const idx = players.indexOf(p);
+    pending.add(idx);
+    for (let k = 0, n = picks(p); k < n; k++) await remotePick(p, k > 0);
+    pending.delete(idx); syncMeta();
+  }));
   local.forEach(p => pending.add(players.indexOf(p)));
   syncMeta();
   for (const p of local) {
-    const offer = offerFor(), r = await showDraft(p, offer);
+    for (let k = 0, n = picks(p); k < n; k++) {
+      const offer = offerFor(p), r = await showDraft(p, offer, k > 0);
+      applyPick(p, offer, r);
+    }
     pending.delete(players.indexOf(p));
-    applyPick(p, offer, r);
   }
   await remoteDone;
 }
 
 function startTurn() {
-  players[cur].frames[frame] = [];
-  rackFor(players[cur]);
+  const p = players[cur];
+  p.frames[frame] = [];
+  if (p.chaosNext) { // Crowd Chaos landed on this player
+    p.nerfs.push({ id: p.chaosNext, from: 'The Crowd', dir: pick([-1, 1]) });
+    fx({ e: 'toast', html: `The crowd's <b>${AUGS[p.chaosNext].name}</b> hits ${pname(p)}`, ic: p.chaosNext, color: '#8b5cff', hurt: cur });
+    p.chaosNext = null;
+    syncMeta();
+  }
+  rackFor(p);
   setupAim();
 }
 // a fresh rack; Wide Rack spreads it out (still inside the lane)
 function rackFor(p) {
   rack(L);
-  if (mods(p).wide) for (const q of L.pins) { q.x *= 1.1; q.z = HEAD_Z + (q.z - HEAD_Z) * 1.3; }
+  const m = mods(p);
+  if (m.wide) for (const q of L.pins) { q.x *= 1.1; q.z = HEAD_Z + (q.z - HEAD_Z) * 1.3; }
+  if (m.mega) L.pins[0].s = 2.2; // the head pin
 }
 
 function setupAim() {
@@ -528,7 +664,11 @@ function setupAim() {
   L.aim = freshAim();
   Object.assign(L.ball, { x: 0, z: START_Z, vx: 0, vz: 0, r: m.radius, m: m.mass, active: false, gutter: false, visible: true, y: 0 });
   const rolls = p.frames[frame];
-  L.roll = { bumpers: m.bumpers && rolls.length === 0, wall: p.wallNext ? pick([-1, 1]) : 0, first: rolls.length === 0 || freshRack(rolls), steer: 0 };
+  // m: the sim also runs while aiming, so pins knocked by an Earthquake Button can fall
+  L.roll = { bumpers: m.bumpers && rolls.length === 0, wall: p.wallNext ? pick([-1, 1]) : 0, first: rolls.length === 0 || freshRack(rolls), steer: 0, m };
+  L.extra = [];
+  L.live = freshLive(liveOf(p));
+  if (rolls.length === 0) for (const q of players) if (q.bot && q.bet?.on === cur) placeBet(players.indexOf(q), pick(Object.keys(BETS)));
   if (p.wallNext) fx({ e: 'toast', html: `A brick wall blocks ${pname(p)}'s lane!`, ic: 'wall', color: '#8b5cff' });
   p.wallNext = false;
   L.timer = m.fuse ? 6 : AIM_TIME;
@@ -539,7 +679,9 @@ function setupAim() {
 
 async function botTurn() {
   const p = players[cur], t = turn;
-  await wait(600 + Math.random() * 600);
+  // a bot being heckled while it aims takes its time, so the heckler gets to play
+  const heckled = ['aim', 'both'].includes(LIVE[L.live?.id]?.phase);
+  await wait(heckled ? 3500 + Math.random() * 2000 : 600 + Math.random() * 600);
   if (t !== turn || !p.bot) return;
   const m = mods(p), standing = L.pins.filter(q => q.standing);
   if (!p.ultUsed && (Math.random() < 0.12 || frame === 9)) tryUlt();
@@ -569,7 +711,83 @@ function tryUlt() {
   }
   if (p.ult === 'wreck') L.ball.r = 0.32;
   fx({ e: 'ult', who: cur });
+  if (p.ult === 'chaos') { p.ultArmed = false; startVote(p); }
   syncMeta();
+}
+
+// ---------- Crowd Chaos: everyone but the target votes on a nerf for the leader's next turn ----------
+let vote = null, voteSeq = 0;
+const CHAOS = ['moon', 'rebel', 'pinbowl', 'mega', 'banana', 'wind', 'pebble', 'butter', 'reverse', 'fog', 'wide', 'grease'];
+function startVote(p) {
+  const t = leader(p);
+  if (!t) return;
+  const target = players.indexOf(t), id = ++voteSeq;
+  vote = { id, target, choices: [...CHAOS].sort(() => Math.random() - 0.5).slice(0, 3), votes: {} };
+  players.forEach((q, i) => { if (q.bot && i !== target) vote.votes[i] = Math.floor(Math.random() * 3); });
+  fx({ e: 'vote', id, target, choices: vote.choices, by: players.indexOf(p) });
+  wait(8000).then(() => closeVote(id));
+}
+// own(q): does player q belong to whoever is voting?
+function castVote(own, id, c) {
+  if (!vote || vote.id !== id || ![0, 1, 2].includes(c)) return;
+  players.forEach((q, i) => { if (own(q) && !q.bot && i !== vote.target) vote.votes[i] = c; });
+}
+function closeVote(id) {
+  if (!vote || vote.id !== id) return;
+  const n = [0, 0, 0];
+  Object.values(vote.votes).forEach(c => n[c]++);
+  const win = vote.choices[pick([0, 1, 2].filter(i => n[i] === Math.max(...n)))];
+  players[vote.target].chaosNext = win;
+  fx({ e: 'voted', id, target: vote.target, win });
+  vote = null;
+}
+function showVote(e) {
+  const el = $('vote'), can = players.some((q, i) => isMine(q) && i !== e.target);
+  el.innerHTML = `<div class="lbl">CROWD CHAOS · ${pname(players[e.by])}</div><h4>Vote: ${pname(players[e.target])}'s next nightmare</h4>`
+    + `<div class="opts">${e.choices.map((id, i) => `<button class="btn" data-c="${i}"${can ? '' : ' disabled'}>${icon(id)} ${AUGS[id].name}</button>`).join('')}</div><div class="timer"><i></i></div>`;
+  el.classList.remove('hidden');
+  el.querySelectorAll('button').forEach(b => b.onclick = () => {
+    const c = +b.dataset.c;
+    el.querySelectorAll('button').forEach(x => { x.disabled = true; x.classList.toggle('on', x === b); });
+    if (auth()) castVote(isMine, e.id, c); else net.send({ t: 'vote', id: e.id, c });
+  });
+  sfx.vote();
+}
+
+// ---------- Hot Tip bets (host) ----------
+function placeBet(by, c) {
+  const q = players[by], p = players[cur];
+  if (!q?.bet || q.bet.on !== cur || q.bet.call || !BETS[c] || L.phase !== 'aim' || p.frames[frame]?.length) return;
+  q.bet.call = c;
+  fx({ e: 'toast', html: `${pname(q)} bets <b>${BETS[c]}</b> on ${pname(p)}`, ic: 'bet', color: kindColor('bet') });
+  syncMeta();
+}
+function settleBets(p) {
+  const r = p.frames[frame], i = players.indexOf(p);
+  const res = r[0] === 10 ? 'X' : r[0] + (r[1] ?? 0) === 10 ? '/' : 'open';
+  for (const q of players) if (q.bet?.on === i && q.bet.call) {
+    const won = q.bet.call === res;
+    if (won) q.bonus = (q.bonus || 0) + 1;
+    fx({ e: 'toast', html: won ? `${pname(q)} called it! Extra card next frame` : `${pname(q)} lost the bet`, ic: 'bet', color: won ? kindColor('buff') : '#8a84b8' });
+    q.bet = null;
+  }
+}
+
+// ---------- bowler-side live interactions (host) ----------
+function swat() {
+  const f = L.live?.fly;
+  if (!f || f.stun || L.phase !== 'aim') return;
+  f.stun = 2.5;
+  fx({ e: 'swat' });
+}
+// Portals: the entry is whichever is nearer the bowler
+function placePortal(x, z) {
+  const P = L.live?.portals;
+  if (!P || !mods(players[cur]).portal || L.phase !== 'aim' || P.length >= 2) return;
+  const q = { x: clamp(x, -0.4, 0.4), z: clamp(z, -15, -2) };
+  if (P.length && Math.abs(P[0].z - q.z) < 1.5) return;
+  P.push(q); P.sort((a, b) => b.z - a.z);
+  fx({ e: 'portal', x: q.x, z: q.z });
 }
 
 // params.angle is the final launch angle, sway included
@@ -583,6 +801,9 @@ function throwBall(params) {
   p.ultArmed = false;
   const x = clamp(+params.x || 0, -LANE_HALF + L.ball.r, LANE_HALF - L.ball.r);
   const angle = clamp(+params.angle || 0, -0.12, 0.12), spin = clamp(+params.spin || 0, -1, 1), power = clamp(+params.power || 0, 0, 1);
+  if (L.live.id === 'cheer' && L.live.done) m.speed *= 1.2;
+  // portals not placed by hand: entry on the ball's line, exit lined up on the pocket
+  if (m.portal && L.live.portals.length < 2) L.live.portals = [{ x: clamp(x + Math.sin(angle) * (START_Z + 5), -0.4, 0.4), z: -5 }, { x: pick([-0.07, 0.07]), z: -12.5 }];
   launch(L, { x, angle, spin, power }, m);
   Object.assign(L.aim, { x, disp: angle, spin, power, thrown: true, charging: false });
   phase = 'roll'; L.phase = 'roll';
@@ -595,7 +816,7 @@ const simEvent = (name, a, b) => {
   if (name === 'knock') fx({ e: 'knock', x: a, z: b });
   else if (name === 'pin') { if (a > 0.03) fx({ e: 'pin', s: a, x: b }); }
   else if (name === 'contact') fx({ e: 'contact', fast: L.roll.first && a > 5 });
-  else if (name === 'boom' || name === 'rocket' || name === 'banana') fx({ e: name, x: a, z: b, who: cur });
+  else if (['boom', 'rocket', 'banana', 'bonk', 'oil', 'gullhit', 'warp', 'split', 'rebel'].includes(name)) fx({ e: name, x: a, z: b, who: cur });
   else fx({ e: name, x: a });
 };
 
@@ -621,6 +842,7 @@ async function endRoll() {
     if (freshRack(rolls)) rackFor(p); else sweep(L);
     return setupAim();
   }
+  settleBets(p);
   if (++cur < players.length) return startTurn();
   if (++frame < 10) return beginFrame();
   phase = 'end'; L.phase = 'idle';
@@ -636,16 +858,17 @@ function showEnd() {
   $('end').classList.remove('hidden');
   sfx.win(); confetti();
   log('GAME OVER ' + ranked.map(p => `${p.name}=${total(p.frames)}`).join(' '));
+  if (net.mode === 'host') log('LIVE INPUTS FROM GUESTS ' + JSON.stringify(netLive));
 }
 
 // ---------- draft UI (used for local players and, on clients, for "my" pick) ----------
-function showDraft(p, offer) {
+function showDraft(p, offer, extra) {
   const others = players.filter(o => o !== p);
   return new Promise(done => {
     $('wait').classList.add('hidden');
     $('draft').classList.remove('hidden');
     $('drafttitle').style.setProperty('--pc', p.color);
-    $('drafttitle').innerHTML = `<span>${p.name}</span>, pick an augment`;
+    $('drafttitle').innerHTML = `<span>${p.name}</span>, pick ${extra ? 'a bonus card' : 'an augment'}`;
     $('targets').classList.add('hidden');
     $('cards').innerHTML = '';
     sfx.deal();
@@ -661,17 +884,19 @@ function showDraft(p, offer) {
     };
     const els = offer.map((id, i) => {
       const a = AUGS[id], el = document.createElement('div');
-      el.className = `card ${a.kind[0]}`;
-      el.innerHTML = `<div class="art"><span class="kind">${a.kind === 'buff' ? 'BUFF' : 'SABOTAGE'}</span><span class="num"><kbd>${i + 1}</kbd></span><b>${icon(id)}</b></div><h3>${a.name}</h3><p>${a.desc}</p>`;
+      el.className = `card k-${a.kind}`;
+      el.innerHTML = `<div class="art"><span class="kind">${KINDS[a.kind][1]}</span><span class="num"><kbd>${i + 1}</kbd></span><b>${icon(id)}</b></div><h3>${a.name}</h3><p>${a.desc}</p>`;
       el.onmouseenter = () => sfx.hover();
       el.onclick = () => {
         if (a.kind === 'buff') return finish(id);
         sfx.click();
         const t = $('targets'); t.classList.remove('hidden');
-        t.innerHTML = `<h4>Who gets ${a.name}? <kbd>1</kbd>–<kbd>${others.length}</kbd></h4>`;
+        const q = a.kind === 'help' ? `Who do you help with ${a.name}?` : a.kind === 'bet' ? 'Bet on whose frame?' : `Who gets ${a.name}?`;
+        t.innerHTML = `<h4>${q} <kbd>1</kbd>–<kbd>${others.length}</kbd></h4>`;
         targetBtns = others.map(o => {
           const bt = document.createElement('button'); bt.className = 'btn';
-          bt.innerHTML = `<span class="avatar" style="--pc:${o.color}">${initial(o)}</span>${o.name} · ${total(o.frames)}`;
+          bt.disabled = !!LIVE[id] && !!liveOf(o); // one live card per bowler
+          bt.innerHTML = `<span class="avatar" style="--pc:${o.color}">${initial(o)}</span>${o.name} · ${total(o.frames)}${bt.disabled ? ' · taken' : ''}`;
           bt.onclick = () => finish(id, o); t.append(bt);
           return bt;
         });
@@ -714,10 +939,87 @@ addEventListener('keyup', e => {
 });
 addEventListener('blur', () => keys.clear());
 
+// ---------- mouse: live-card controls for whoever holds the card; swatting and portals for the bowler ----------
+const ray = new THREE.Raycaster(), ndc = new THREE.Vector2(), hitV = new THREE.Vector3(), ground = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function laneAt(e) {
+  ndc.set(e.clientX / innerWidth * 2 - 1, 1 - e.clientY / innerHeight * 2);
+  ray.setFromCamera(ndc, camera);
+  return ray.ray.intersectPlane(ground, hitV) ? { x: hitV.x, z: hitV.z } : null;
+}
+// the live card this machine is driving right now, if any
+const controlling = () => {
+  const X = L.live, q = X && LIVE[X.id] && players[X.by];
+  return q && phase !== 'menu' && isMine(q) && liveOpen(L) ? X : null;
+};
+let ctlLocal = {}, inkPts = null, lastMove = 0, dragPin = -1, blowSide = 0, mouseAt = null;
+function liveSend(d) {
+  if (auth()) return liveInput(L, d, fx, players[L.live.by].color);
+  net.send({ t: 'live', ...d });
+  if (d.a === 'fly') ctlLocal.fly = { x: d.x, y: d.y };
+  if (d.a === 'fake') ctlLocal.fake = d.v;
+  if (d.a === 'cam') ctlLocal.cam = [d.x, d.y];
+}
+function flushInk(end) {
+  if (inkPts?.length >= 4) liveSend({ a: 'ink', s: inkPts });
+  inkPts = end ? null : inkPts.slice(-2);
+}
+const frac = e => [e.clientX / innerWidth, e.clientY / innerHeight];
+function nearestPin(h) {
+  let best = -1, bd = 0.3;
+  L.pins.forEach((p, i) => { const d = Math.hypot(p.x - h.x, p.z - h.z); if (p.standing && !p.gone && d < bd) { bd = d; best = i; } });
+  return best;
+}
+renderer.domElement.addEventListener('pointerdown', e => {
+  const X = controlling(), [fx_, fy] = frac(e);
+  if (X) {
+    const kind = LIVE[X.id].input;
+    if (kind === 'drag') inkPts = [fx_, fy];
+    if (kind === 'click') liveSend({ a: X.id, x: fx_, y: fy });
+    if (kind === 'lane') { const h = laneAt(e); if (h) liveSend({ a: 'lane', ...h }); }
+    if (kind === 'pin') { const h = laneAt(e); dragPin = h ? nearestPin(h) : -1; }
+    if (kind === 'hold') liveSend({ a: 'blow', v: blowSide = fx_ < 0.5 ? -1 : 1 });
+    if (kind === 'mash') { liveSend({ a: 'mash' }); sfx.tick(); }
+    return;
+  }
+  if (!myTurn()) return;
+  const fly = L.live?.fly;
+  if (fly && !fly.stun && Math.hypot((fx_ - fly.x) * innerWidth, (fy - fly.y) * innerHeight) < 70) return auth() ? swat() : net.send({ t: 'swat' });
+  if (mods(players[cur]).portal) { const h = laneAt(e); if (h) auth() ? placePortal(h.x, h.z) : net.send({ t: 'portal', ...h }); }
+});
+addEventListener('pointermove', e => {
+  mouseAt = e;
+  const X = controlling();
+  if (!X) return;
+  const [x, y] = frac(e), kind = LIVE[X.id].input, now = performance.now();
+  if (kind === 'drag' && inkPts) { inkPts.push(x, y); if (inkPts.length >= 12) flushInk(); }
+  if (kind === 'hold' && e.buttons && (x < 0.5 ? -1 : 1) !== blowSide) liveSend({ a: 'blow', v: blowSide = x < 0.5 ? -1 : 1 });
+  if (kind === 'move' && now - lastMove > 50) {
+    lastMove = now;
+    liveSend(X.id === 'fly' ? { a: 'fly', x, y } : X.id === 'fakeaim' ? { a: 'fake', v: (x - 0.5) * 0.16 }
+      : X.id === 'camjack' ? { a: 'cam', x: (x - 0.5) * 2, y: (y - 0.5) * 2 } : { a: 'goal', v: (x - 0.5) * 1.4 });
+  }
+});
+addEventListener('pointerup', e => {
+  const X = controlling();
+  if (inkPts) flushInk(true);
+  if (X?.id === 'shuffle' && dragPin >= 0) { const h = laneAt(e); if (h) liveSend({ a: 'pin', i: dragPin, ...h }); }
+  if (X?.id === 'blower' && blowSide) liveSend({ a: 'blow', v: blowSide = 0 });
+  dragPin = -1;
+});
+// where the placement ring goes: lane cards, a pin being dragged, or the bowler's portals
+function cursorAt() {
+  if (!mouseAt) return null;
+  const X = controlling(), kind = X && LIVE[X.id].input;
+  const portals = myTurn() && L.live && mods(players[cur]).portal && L.live.portals.length < 2;
+  if (!(kind === 'lane' || (kind === 'pin' && dragPin >= 0) || portals)) return null;
+  const h = laneAt(mouseAt);
+  return h && { ...h, c: portals ? (L.live.portals.length ? '#ff8a00' : '#3df0ff') : '#ffffff' };
+}
+
 // ---------- main loop ----------
 const camPos = new THREE.Vector3(0, 1.4, 3), camLook = new THREE.Vector3(0, 0, -18), tmpV = new THREE.Vector3();
 let last = performance.now(), clock = 0, lastAimSent = 0, lastSteer = 0;
-let announced = -1;
+let announced = -1, botLive = {};
 function frameLoop(now) {
   const realDt = Math.min(0.05, (now - last) / 1000) * SPEED; last = now; clock += realDt;
   slowmo = Math.max(0, slowmo - realDt);
@@ -757,6 +1059,21 @@ function frameLoop(now) {
     clockEl.textContent = show ? ` · ${s}s` : '';
     clockEl.classList.toggle('low', show && s <= 5);
   }
+  // live cards (host): timers, bot controllers, and the sim keeps running while aiming so shoved or quaked pins settle
+  if (auth() && phase !== 'menu' && L.live?.id) {
+    liveTick(L, dt);
+    const q = players[L.live.by];
+    if (q?.bot && liveOpen(L)) {
+      if (botLive.for !== L.live) botLive = { for: L.live };
+      liveBot(L, dt, botLive, d => liveInput(L, d, fx, q.color));
+    }
+  }
+  if (L.phase === 'aim' && auth() && L.roll?.m) for (let s = 0; s < 4; s++) step(L, dt / 4, simEvent);
+  // net test: the scripted guest plays its live cards like a bot, but through the network
+  if (TEST && net.mode === 'client' && controlling()) {
+    if (botLive.turn !== turn) botLive = { turn };
+    liveBot(L, realDt, botLive, liveSend);
+  }
   if (L.phase === 'roll' && auth()) {
     if (isMine(p)) {
       const v = (keys.has('KeyD') || keys.has('ArrowRight') ? 1 : 0) - (keys.has('KeyA') || keys.has('ArrowLeft') ? 1 : 0);
@@ -768,6 +1085,11 @@ function frameLoop(now) {
     if (v !== lastSteer) { lastSteer = v; net.send({ t: 'steer', v }); }
   }
   // rolling rumble + trail follow the ball
+  const X = L.live, rolling = L.phase === 'roll' && L.ball.active;
+  if (rolling && X?.blow) emit(L.ball.x - X.blow * 0.3, 0.12, L.ball.z, 2, ['#cfe9ff', '#8bd346', '#ffb627'], 0.8, 0.03, 0);
+  if (rolling && X?.sweep > 0) emit(L.ball.x, 0.03, L.ball.z - L.ball.r - 0.15, 2, ['#ffffff', '#d8ecff'], 0.7, 0.025, 0);
+  sfx.blower(!!(L.phase === 'roll' && X?.blow));
+  sfx.buzz(L.phase === 'aim' && X?.fly ? X.fly.x * 2 - 1 : null, X?.fly?.stun > 0);
   if (L.phase === 'roll' && L.ball.active) {
     sfx.rollStart(); sfx.rollUpdate(Math.hypot(L.ball.vx, L.ball.vz), L.ball.gutter, L.ball.x);
     if (!L.ball.gutter && Math.random() < 0.6) emit(L.ball.x, 0.03, L.ball.z + L.ball.r, 1, [p?.color || '#fff'], 0.2, 0.025, 0);
@@ -778,7 +1100,9 @@ function frameLoop(now) {
   const ease = rate => 1 - Math.exp(-realDt * rate);
   const aiming = L.phase === 'aim' && !!p;
   if (aiming) {
-    camPos.lerp(tmpV.set(L.aim.x * 0.5, 0.75, 2.3), ease(5)); camLook.lerp(tmpV.set(L.aim.x * 0.2, 0.05, -6), ease(5));
+    const cj = X?.cam || [0, 0]; // Camera Hijack
+    camPos.lerp(tmpV.set(L.aim.x * 0.5 + cj[0] * 0.7, 0.75 + cj[1] * 0.35, 2.3 + cj[1] * 1.2), ease(5));
+    camLook.lerp(tmpV.set(L.aim.x * 0.2 + cj[0] * 1.6, 0.05, -6), ease(5));
   } else if (L.phase === 'roll' || L.phase === 'result') {
     camPos.lerp(tmpV.set(L.ball.x * 0.6, 0.95, Math.max(L.ball.z + 2.4, -13.8)), ease(7));
     camLook.lerp(tmpV.set(L.ball.x * 0.4, 0.15, Math.max(L.ball.z - 5, HEAD_Z)), ease(7));
@@ -786,8 +1110,11 @@ function frameLoop(now) {
     camPos.lerp(tmpV.set(Math.sin(clock * 0.15) * 3, 1.6 + Math.sin(clock * 0.2) * 0.3, -11 + Math.cos(clock * 0.15) * 4), ease(1.2));
     camLook.lerp(tmpV.set(0, 0.2, -18), ease(1.2));
   }
-  showAim(aiming, 0, L.aim.x, L.ball.z, L.aim.disp, clock);
-  syncLane(0, L, p?.color, aiming && isMine(p) && m.fog);
+  showAim(aiming, 0, L.aim.x, L.ball.z, L.aim.disp, clock, aiming && X?.fake != null ? X.fake + swayNow(L.aim, m) : null);
+  syncLane(0, L, p?.color, aiming && isMine(p) && m.fog, !!m?.pinbowl);
+  syncProps(L, realDt, clock, cursorAt(), MOLE_LIFE);
+  drawScreen(realDt, aiming && X?.fly ? X.fly : null);
+  renderLive();
   updateParticles(dt);
   shake = Math.max(0, shake - realDt);
   camera.position.copy(camPos).add(tmpV.set((Math.random() - 0.5) * shake * 0.3, (Math.random() - 0.5) * shake * 0.3, 0));
@@ -802,7 +1129,25 @@ rack(L);
 requestAnimationFrame(frameLoop);
 
 // ---------- test hooks ----------
-if (TEST) window.__game = { get phase() { return phase; }, get human() { return myTurn(); }, get power() { return L.aim.power; } };
+if (TEST) window.__game = { get phase() { return phase; }, get human() { return myTurn(); }, get power() { return L.aim.power; },
+  L, get players() { return players; }, get cur() { return cur; }, get vote() { return vote; }, screenBusy, mods, throwBall, tryUlt, swat,
+  start: startGame,
+  // put a card on the current bowler, held by player `by`, and restart their ball
+  give(id, by) {
+    const p = players[cur], k = AUGS[id].kind;
+    p.buffs = []; p.nerfs = [];
+    if (k === 'bet') players[by].bet = { on: cur, call: null };
+    else (k === 'buff' || k === 'help' ? p.buffs : p.nerfs).push({ id, from: players[by].name, by });
+    p.frames[frame] = []; rackFor(p); setupAim();
+  },
+  screenOf(x, z) { const v = new THREE.Vector3(x, 0, z).project(camera); return [(v.x + 1) / 2 * innerWidth, (1 - v.y) / 2 * innerHeight]; },
+  shot() { // the 3D view plus the effects canvas (DOM HUD not included)
+    render();
+    const r = renderer.domElement, c = document.createElement('canvas'), g = c.getContext('2d');
+    c.width = r.width; c.height = r.height; g.drawImage(r, 0, 0); g.drawImage($('fxc'), 0, 0, c.width, c.height);
+    return c.toDataURL('image/png');
+  } };
+if (HASH === 'livetest') import('./livetest.js').then(t => t.run(window.__game));
 if (AUTO) startGame(botSeats(4, 0));
 if (HASH === 'playtest' || HASH === 'draft') startGame([{ name: 'Player 1', bot: false, owner: 'local' }, ...botSeats(3, 1)]);
 if (HASH.startsWith('nethost')) { $('pname').value = 'Host'; $('hostbtn').click(); const iv = setInterval(() => { if (net.code) { console.log('LOBBY CODE ' + net.code); lobby.bots = 2; broadcastLobby(); clearInterval(iv); } }, 200); }

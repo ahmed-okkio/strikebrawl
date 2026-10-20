@@ -1,7 +1,7 @@
 {
   "name": "strike-brawl",
   "productName": "Strike Brawl",
-  "version": "1.3.2",
+  "version": "1.4.0",
   "description": "Chaotic party bowling with augments and sabotage.",
   "type": "module",
   "main": "main.cjs",
@@ -34,6 +34,7 @@
       "build/icon.png",
       "!test.js",
       "!playtest.cjs",
+      "!livetest.js",
       "!nettest.cjs",
       "!make-icon.cjs",
       "!dist/**",

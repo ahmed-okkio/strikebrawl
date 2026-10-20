@@ -273,30 +273,51 @@ export const views = [0].map(x0 => {
   });
   const blob = new THREE.Mesh(new THREE.CircleGeometry(1, 24), blobMat);
   blob.rotation.x = -Math.PI / 2; blob.renderOrder = 1; scene.add(blob);
-  return { x0, pins, ball, blob, wall, bumpers, setOwner: deco.setOwner };
+  // Split Ball's two extra balls share the main ball's look
+  const extras = [0, 1].map(() => {
+    const m = new THREE.Mesh(ballGeo, ball.material); m.castShadow = true; m.visible = false; scene.add(m);
+    const s = new THREE.Mesh(blob.geometry, blobMat); s.rotation.x = -Math.PI / 2; s.renderOrder = 1; scene.add(s);
+    return { ball: m, blob: s };
+  });
+  // Bowling Pin Ball: a big pin lying across the lane, rolling like a log (its collision shape is PINBALL in sim.js)
+  const pinBall = new THREE.Group(), pb = makePinMesh();
+  pb.rotation.z = -Math.PI / 2; pb.position.x = -0.28; pb.scale.setScalar(1.5);
+  pinBall.add(pb); pinBall.visible = false; scene.add(pinBall);
+  return { x0, pins, ball, blob, wall, bumpers, extras, pinBall, setOwner: deco.setOwner };
 });
 
 const tmpQ = new THREE.Quaternion(), tmpV = new THREE.Vector3();
-// Copy a lane's sim state onto its meshes. hidePins = fog of war for the local viewer.
-export function syncLane(i, L, color, hidePins) {
-  const v = views[i], b = L.ball;
-  if (color && v.ball.userData.color !== color) { v.ball.material.map = ballTexture(color); v.ball.material.needsUpdate = true; v.ball.userData.color = color; }
-  v.ball.visible = L.phase !== 'idle' && b.visible;
-  v.ball.scale.setScalar(b.r);
-  const px = v.ball.position.x, pz = v.ball.position.z;
+// Place a ball mesh (and its contact shadow) on a sim ball. log: a lying pin, which only rolls about the x axis.
+function placeBall(mesh, blob, b, x0, show, log) {
+  mesh.visible = show;
+  blob.visible = show && !b.gutter && !(b.y < 0);
+  if (!show) return;
+  if (!log) mesh.scale.setScalar(b.r);
+  const px = mesh.position.x, pz = mesh.position.z;
   // in the gutter a small ball rests on the trough floor, a big one rides the rims
   const gy = b.r > GUTTER_R ? Math.sqrt(b.r * b.r - GUTTER_R * GUTTER_R) : b.r - GUTTER_R;
-  v.ball.position.set(v.x0 + b.x, (b.gutter ? gy : b.r) + (b.y || 0), b.z);
-  v.blob.visible = v.ball.visible && !b.gutter && !(b.y < 0);
-  v.blob.position.set(v.x0 + b.x, 0.002, b.z); v.blob.scale.setScalar(b.r * 3.2);
-  const dx = v.ball.position.x - px, dz = v.ball.position.z - pz, dist = Math.hypot(dx, dz);
-  if (dist > 1e-5 && dist < 1) v.ball.quaternion.premultiply(tmpQ.setFromAxisAngle(tmpV.set(dz, 0, -dx).normalize(), dist / b.r));
+  mesh.position.set(x0 + b.x, (b.gutter ? gy : b.r) + (b.y || 0), b.z);
+  blob.position.set(x0 + b.x, 0.002, b.z); blob.scale.setScalar(b.r * 3.2);
+  const dx = mesh.position.x - px, dz = mesh.position.z - pz, dist = Math.hypot(dx, dz);
+  if (dist < 1e-5 || dist > 1) return;
+  if (log) mesh.rotation.x += dz / b.r;
+  else mesh.quaternion.premultiply(tmpQ.setFromAxisAngle(tmpV.set(dz, 0, -dx).normalize(), dist / b.r));
+}
+// Copy a lane's sim state onto its meshes. hidePins = fog of war for the local viewer. pinBall = Bowling Pin Ball.
+export function syncLane(i, L, color, hidePins, pinBall) {
+  const v = views[i], b = L.ball;
+  if (color && v.ball.userData.color !== color) { v.ball.material.map = ballTexture(color); v.ball.material.needsUpdate = true; v.ball.userData.color = color; }
+  const [on, off] = pinBall ? [v.pinBall, v.ball] : [v.ball, v.pinBall];
+  off.visible = false;
+  placeBall(on, v.blob, b, v.x0, L.phase !== 'idle' && b.visible, pinBall);
+  v.extras.forEach((e, k) => { const x = L.extra?.[k]; placeBall(e.ball, e.blob, x || b, v.x0, !!x?.visible && L.phase !== 'idle'); });
   L.pins.forEach((p, k) => {
-    const m = v.pins[k];
+    const m = v.pins[k], s = p.s || 1;
     m.visible = !p.gone && !hidePins;
+    m.scale.setScalar(s);
     const ang = p.standing ? 0 : p.tilt * Math.PI / 2 + (p.tumble || 0);
     // a lying pin rests on its belly, not its base pivot; in the gutter it sinks into the trough
-    const lift = 0.055 * Math.abs(Math.sin(ang)) + (Math.abs(p.x) > LANE_HALF + 0.04 && p.z > PIT_Z ? -0.07 : 0);
+    const lift = 0.055 * s * Math.abs(Math.sin(ang)) + (Math.abs(p.x) > LANE_HALF + 0.04 && p.z > PIT_Z ? -0.07 : 0);
     m.position.set(v.x0 + p.x, (p.y || 0) + lift, p.z);
     m.quaternion.setFromAxisAngle(tmpV.set(p.dz, 0, -p.dx), ang);
   });
@@ -308,18 +329,120 @@ export function syncLane(i, L, color, hidePins) {
 
 // ---------- aim guide (one, shown on the lane being aimed by the local player) ----------
 const aimMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.85, toneMapped: false, depthWrite: false });
-const aimDots = [...Array(14)].map((_, i) => {
-  const d = new THREE.Mesh(new THREE.CircleGeometry(0.025 - i * 0.0012, 12), aimMat);
-  d.rotation.x = -Math.PI / 2; scene.add(d); return d;
-});
-const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 3), glow('#ffc93c'));
-arrow.rotation.x = -Math.PI / 2; scene.add(arrow);
-export function showAim(on, x0, x, z, a, t) {
-  arrow.visible = on; aimDots.forEach(d => d.visible = on);
-  if (!on) return;
-  aimDots.forEach((d, i) => d.position.set(x0 + x + Math.sin(a) * (0.35 + i * 0.32), 0.003, z - Math.cos(a) * (0.35 + i * 0.32)));
+const arrowMat = glow('#ffc93c');
+function makeGuide() {
+  const dots = [...Array(14)].map((_, i) => {
+    const d = new THREE.Mesh(new THREE.CircleGeometry(0.025 - i * 0.0012, 12), aimMat);
+    d.rotation.x = -Math.PI / 2; scene.add(d); return d;
+  });
+  const arrow = new THREE.Mesh(new THREE.ConeGeometry(0.07, 0.22, 3), arrowMat);
+  arrow.rotation.x = -Math.PI / 2; scene.add(arrow);
+  return { dots, arrow };
+}
+const guides = [makeGuide(), makeGuide()]; // the second is Fake Aim Line's decoy, drawn identically
+// fake: the decoy's angle, or null for none
+export function showAim(on, x0, x, z, a, t, fake = null) {
   aimMat.opacity = 0.55 + 0.3 * Math.sin(t * 6);
-  arrow.position.set(x0 + x + Math.sin(a) * 5, 0.02, z - Math.cos(a) * 5); arrow.rotation.z = -a;
+  guides.forEach((g, i) => {
+    const ang = i ? fake : a, vis = on && ang !== null;
+    g.arrow.visible = vis; g.dots.forEach(d => d.visible = vis);
+    if (!vis) return;
+    g.dots.forEach((d, k) => d.position.set(x0 + x + Math.sin(ang) * (0.35 + k * 0.32), 0.003, z - Math.cos(ang) * (0.35 + k * 0.32)));
+    g.arrow.position.set(x0 + x + Math.sin(ang) * 5, 0.02, z - Math.cos(ang) * 5); g.arrow.rotation.z = -ang;
+  });
+}
+
+// ---------- live-card props (see live.js): moles, oil, the seagull, the goalie, portals, a placement cursor ----------
+const fur = mat('#7a4a2a', { roughness: 0.9 }), black = mat('#111111');
+const moles = [0, 1, 2].map(() => {
+  const g = new THREE.Group(), body = new THREE.Group();
+  const hole = new THREE.Mesh(new THREE.CircleGeometry(0.1, 20), mat('#1c1208', { roughness: 1 }));
+  hole.rotation.x = -Math.PI / 2; hole.position.y = 0.003;
+  const torso = new THREE.Mesh(new THREE.CapsuleGeometry(0.06, 0.1, 6, 12), fur);
+  torso.position.y = 0.1; torso.castShadow = true;
+  const nose = new THREE.Mesh(new THREE.SphereGeometry(0.02, 10, 8), mat('#ff8fb0'));
+  nose.position.set(0, 0.16, 0.06);
+  body.add(torso, nose);
+  for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.011, 8, 6), black); e.position.set(s * 0.025, 0.185, 0.05); body.add(e); }
+  g.add(hole, body); g.visible = false; scene.add(g);
+  return { g, body };
+});
+const oilMat = new THREE.MeshPhysicalMaterial({ color: '#ffffff', transparent: true, depthWrite: false, roughness: 0.05, clearcoat: 1, map: canvasTex(128, 128, g => {
+  g.fillStyle = 'rgba(22,14,6,.9)';
+  for (let i = 0; i < 9; i++) { const a = Math.random() * 6.28, d = Math.random() * 26; g.beginPath(); g.arc(64 + Math.cos(a) * d, 64 + Math.sin(a) * d, 20 + Math.random() * 18, 0, 7); g.fill(); }
+  const sheen = g.createRadialGradient(54, 54, 2, 54, 54, 30); sheen.addColorStop(0, 'rgba(140,90,255,.35)'); sheen.addColorStop(1, 'rgba(0,0,0,0)');
+  g.globalCompositeOperation = 'source-atop'; g.fillStyle = sheen; g.fillRect(0, 0, 128, 128);
+}) });
+const oils = [0, 1].map(() => {
+  const o = new THREE.Mesh(new THREE.PlaneGeometry(0.75, 0.75), oilMat);
+  o.rotation.x = -Math.PI / 2; o.renderOrder = 1; o.visible = false; scene.add(o);
+  return o;
+});
+const gull = new THREE.Group(), wings = [];
+{
+  const white = mat('#f4f4f4'), grey = mat('#9aa3b5');
+  const body = new THREE.Mesh(new THREE.SphereGeometry(1, 16, 12), white); body.scale.set(0.07, 0.06, 0.15);
+  const head = new THREE.Mesh(new THREE.SphereGeometry(0.05, 12, 10), white); head.position.set(0, 0.04, 0.13);
+  const beak = new THREE.Mesh(new THREE.ConeGeometry(0.015, 0.06, 8), mat('#ffb627')); beak.rotation.x = Math.PI / 2; beak.position.set(0, 0.035, 0.2);
+  for (const s of [-1, 1]) {
+    const w = new THREE.Group(), m = new THREE.Mesh(new THREE.BoxGeometry(0.3, 0.012, 0.1), grey);
+    m.position.x = s * 0.15; w.add(m); w.position.set(s * 0.05, 0.02, 0); w.userData.s = s; gull.add(w); wings.push(w);
+  }
+  for (const s of [-1, 1]) { const e = new THREE.Mesh(new THREE.SphereGeometry(0.009, 8, 6), black); e.position.set(s * 0.03, 0.06, 0.16); gull.add(e); }
+  gull.add(body, head, beak); gull.traverse(o => o.castShadow = true); gull.visible = false; scene.add(gull);
+}
+const goalie = makePinMesh();
+goalie.children[0].material = new THREE.MeshPhysicalMaterial({ map: pinTex, color: '#ffa94d', roughness: 0.25, clearcoat: 1 });
+for (const s of [-1, 1]) { const glove = new THREE.Mesh(new THREE.SphereGeometry(0.03, 12, 10), mat('#3df0ff')); glove.position.set(s * 0.08, 0.2, 0.02); goalie.add(glove); }
+goalie.scale.setScalar(1.5); // belly radius 0.09, as in sim.js goalie.visible = false; scene.add(goalie);
+const portals = ['#3df0ff', '#ff8a00'].map(c => {
+  const g = new THREE.Group();
+  const ring = new THREE.Mesh(new THREE.RingGeometry(0.12, 0.17, 32, 1, 0, 5.4), glow(c));
+  const core = new THREE.Mesh(new THREE.CircleGeometry(0.12, 32), new THREE.MeshBasicMaterial({ color: c, transparent: true, opacity: 0.35, toneMapped: false, depthWrite: false }));
+  g.add(ring, core); g.visible = false; scene.add(g); // an upright hoop the ball rolls through
+  return g;
+});
+const cursorMat = new THREE.MeshBasicMaterial({ color: '#ffffff', transparent: true, opacity: 0.9, toneMapped: false, depthWrite: false });
+const cursor = new THREE.Mesh(new THREE.RingGeometry(0.07, 0.095, 28), cursorMat);
+cursor.rotation.x = -Math.PI / 2; cursor.visible = false; scene.add(cursor);
+
+const lerp3 = (a, b, k) => tmpV.set(a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k, a[2] + (b[2] - a[2]) * k);
+let gullT = 0, goalX = 0;
+// L.live -> meshes. cur: { x, z, c } where the placement cursor goes, or null
+export function syncProps(L, dt, t, cur, moleLife) {
+  const X = L.live, aim = L.phase === 'aim', roll = L.phase === 'roll';
+  moles.forEach(({ g, body }, i) => {
+    const mo = roll && X?.moles[i];
+    g.visible = !!mo && mo.t > 0;
+    if (!g.visible) return;
+    g.position.set(mo.x, 0, mo.z);
+    const up = Math.max(0, Math.min(1, (moleLife - mo.t) / 0.15, mo.t / 0.2)); // pops up, ducks back down
+    body.position.y = -0.24 * (1 - up);
+    body.scale.y = mo.bonk ? 0.5 : 1;
+  });
+  oils.forEach((o, i) => { const s = (aim || roll) && X?.oil[i]; o.visible = !!s; if (s) o.position.set(s.x, 0.003, s.z); });
+  // seagull: swoops in from the side, lands at the target when its timer hits 0, then flaps away
+  const gl = X?.gull;
+  gull.visible = !!gl && roll;
+  if (gull.visible) {
+    gullT = Math.abs(gl.t - gullT) > 0.2 ? gl.t : gullT - dt + (gl.t - gullT) * 0.3; // smooth between snapshots
+    const T = [gl.x, 0.12, gl.z], A = [gl.x + gl.side * 2.5, 2.2, gl.z + 1.8], E = [gl.x - gl.side * 2.2, 2.6, gl.z - 2.5];
+    const at = k => (k > 0 ? lerp3(T, A, Math.min(1, k / 0.9)) : lerp3(T, E, Math.min(1, -k / 1.2)));
+    gull.position.copy(at(gullT));
+    gull.lookAt(at(gullT - 0.05));
+    const flap = Math.abs(gullT) < 0.15 ? 0.9 : Math.sin(t * 22) * 0.7;
+    wings.forEach(w => { w.rotation.z = w.userData.s * flap; });
+  }
+  const G = X?.goalie;
+  goalie.visible = !!G && L.phase !== 'idle';
+  if (goalie.visible) {
+    goalX += (G.x - goalX) * Math.min(1, dt * 20);
+    goalie.position.set(G.down ? G.x : goalX, 0, G.z);
+    goalie.rotation.z = -(Math.sign(G.vx) || 1) * G.down * Math.PI / 2;
+  }
+  portals.forEach((g, i) => { const p = (aim || roll) && X?.portals[i]; g.visible = !!p; if (p) { g.position.set(p.x, 0.17, p.z); g.rotation.z += dt * 3; } });
+  cursor.visible = !!cur;
+  if (cur) { cursor.position.set(cur.x, 0.006, cur.z); cursorMat.color.set(cur.c || '#ffffff'); }
 }
 
 // ---------- particles (confetti, sparks, trail) ----------

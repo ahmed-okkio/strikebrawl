@@ -11,7 +11,7 @@
 
   :root {
     --ink: #15123a; --ink-2: #2a2560; --paper: #fffaf0; --muted: #8a84b8;
-    --gold: #ffc93c; --pink: #ff4f8b; --buff: #1fbf75; --nerf: #ff4560; --ult: #8b5cff;
+    --gold: #ffc93c; --pink: #ff4f8b; --buff: #1fbf75; --nerf: #ff4560; --ult: #8b5cff; --live: #ff8a00; --help: #3d8bff; --bet: #e0a800;
     --display: 'Lilita One', 'Segoe UI Black', sans-serif; --body: 'Nunito', 'Segoe UI', sans-serif;
   }
   * { box-sizing: border-box; }
@@ -58,6 +58,7 @@
   .chip b { display: grid; place-items: center; width: 20px; height: 20px; border-radius: 50%; background: rgba(255,255,255,.25); font-size: 13px; }
   .chip small { opacity: .8; font-size: 11px; }
   .buff { background: var(--buff); } .nerf { background: var(--nerf); } .ultc { background: var(--ult); }
+  .live { background: var(--live); } .help { background: var(--help); } .bet { background: var(--bet); }
 
   /* ultimate */
   #ultbtn { position: absolute; right: 22px; bottom: 22px; width: 280px; display: flex; align-items: center; gap: 12px; padding: 10px 14px 10px 10px; cursor: pointer; text-align: left; font-family: var(--body); color: var(--ink); }
@@ -122,8 +123,11 @@
   .card:nth-child(2) { animation-delay: .07s; } .card:nth-child(3) { animation-delay: .14s; }
   .card:hover { transform: translateY(-10px) rotateX(6deg); }
   .card .art { height: 150px; display: grid; place-items: center; position: relative; }
-  .card.b .art { background: radial-gradient(circle at 50% 40%, #6ff0b0, var(--buff)); }
-  .card.n .art { background: radial-gradient(circle at 50% 40%, #ff9db0, var(--nerf)); }
+  .card.k-buff .art { background: radial-gradient(circle at 50% 40%, #6ff0b0, var(--buff)); }
+  .card.k-nerf .art { background: radial-gradient(circle at 50% 40%, #ff9db0, var(--nerf)); }
+  .card.k-live .art { background: radial-gradient(circle at 50% 40%, #ffc27a, var(--live)); }
+  .card.k-help .art { background: radial-gradient(circle at 50% 40%, #9cc7ff, var(--help)); }
+  .card.k-bet .art { background: radial-gradient(circle at 50% 40%, #ffe59a, var(--bet)); }
   .card .art::after { content: ''; position: absolute; inset: 0; background: repeating-conic-gradient(rgba(255,255,255,.12) 0 10deg, transparent 10deg 20deg); }
   .card .art b { position: relative; z-index: 1; display: grid; place-items: center; width: 92px; height: 92px; border-radius: 50%; background: var(--paper); border: 3px solid var(--ink); font-size: 50px; color: var(--ink); box-shadow: 0 5px 0 var(--ink); }
   .card .kind { position: absolute; top: 10px; left: 10px; z-index: 1; font: 12px var(--display); letter-spacing: 1px; color: #fff; background: var(--ink); border-radius: 7px; padding: 2px 8px; }
@@ -134,6 +138,30 @@
   #drafttitle span { color: var(--pc); }
   #targets h4 { margin: 0 0 10px; font: 22px var(--display); font-weight: 400; }
   #targets .btn { font-size: 18px; padding: 6px 14px; margin: 4px; background: #fff; }
+  #targets .btn:disabled { opacity: .45; cursor: default; transform: none; }
+
+  /* live cards: the effects canvas, the card panel, crowd votes and bets */
+  #fxc { position: fixed; inset: 0; width: 100%; height: 100%; pointer-events: none; }
+  body.ctl canvas { cursor: crosshair; }
+  #live { position: absolute; right: 22px; bottom: 122px; width: 280px; display: flex; gap: 10px; align-items: center; padding: 10px 12px; }
+  #live .ic { flex: none; display: grid; place-items: center; width: 48px; height: 48px; border-radius: 14px; background: var(--pc); color: #fff; font-size: 28px; border: 3px solid var(--ink); }
+  #live > div { flex: 1; min-width: 0; }
+  #live .lbl, #vote .lbl, #bet .lbl { font: 11px var(--display); letter-spacing: 1px; color: var(--muted); }
+  #live .nm { font: 20px/1.1 var(--display); }
+  #live .bar { height: 8px; border-radius: 4px; background: #e9e3fb; overflow: hidden; margin-top: 5px; }
+  #live .bar i { display: block; height: 100%; width: 0; background: var(--pc); }
+  #live .hint { font-size: 12px; color: #5d5791; margin-top: 4px; }
+  #live .hint:empty { display: none; }
+  #vote, #bet { position: absolute; left: 18px; top: 50%; transform: translateY(-50%); width: 300px; padding: 12px 14px; }
+  #vote h4, #bet h4 { margin: 2px 0 8px; font: 18px var(--display); font-weight: 400; }
+  .opts { display: flex; flex-direction: column; gap: 6px; }
+  .opts .btn { font-size: 16px; padding: 6px 10px; background: #fff; text-align: left; }
+  .opts .btn.on { background: var(--gold); }
+  .opts .btn:disabled { opacity: .55; cursor: default; transform: none; }
+  .opts .btn.on:disabled { opacity: 1; }
+  #vote .timer { height: 6px; border-radius: 3px; background: #e9e3fb; margin-top: 8px; overflow: hidden; }
+  #vote .timer i { display: block; height: 100%; width: 100%; background: var(--ult); animation: drain 8s linear forwards; }
+  @keyframes drain { to { width: 0; } }
 
   .menucols { display: flex; gap: 22px; flex-wrap: wrap; justify-content: center; align-items: stretch; }
   .menucols .panel { width: 380px; display: flex; flex-direction: column; align-items: center; }
@@ -187,6 +215,9 @@
   <div id="feed"></div>
   <div id="banner"></div>
   <button id="ultbtn" class="chunk"></button>
+  <div id="live" class="chunk hidden"></div>
+  <div id="vote" class="chunk hidden"></div>
+  <div id="bet" class="chunk hidden"></div>
   <div id="keys"><span><kbd>A</kbd><kbd>D</kbd> move</span><span><kbd>←</kbd><kbd>→</kbd> aim</span><span><kbd>Q</kbd><kbd>E</kbd> spin</span><span>hold <kbd>Space</kbd> throw</span><span><kbd>U</kbd> ultimate</span><span><kbd>Esc</kbd> pause</span></div>
   <div id="shot" class="chunk">
     <span class="lbl">POWER</span>
@@ -196,6 +227,8 @@
     <span id="rev" class="hidden">REVERSED</span>
   </div>
 </div>
+
+<canvas id="fxc"></canvas>
 
 <div id="menu" class="overlay">
   <h1 class="logo">STRIKE<em>BRAWL</em></h1>

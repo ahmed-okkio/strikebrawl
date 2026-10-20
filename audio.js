@@ -70,8 +70,23 @@ function applause(dur, vol) {
   }
 }
 
-let rollNodes = null, chargeOsc = null, lastClack = 0;
+let rollNodes = null, chargeOsc = null, lastClack = 0, lastScribble = 0;
 const ok = () => !muted && init().state !== 'closed';
+
+// named continuous sounds (fly buzz, leaf blower): build(gainNode) wires sources into it and returns stop(time)
+const loops = {};
+function startLoop(build) {
+  const g = ctx.createGain(); g.gain.value = 0;
+  const pan = out(g, 0, 0.1);
+  return { g, pan, stop: build(g) };
+}
+function stopLoop(name) {
+  const n = loops[name];
+  if (!n) return;
+  delete loops[name];
+  n.g.gain.setTargetAtTime(0, ctx.currentTime, 0.05);
+  n.stop(ctx.currentTime + 0.3);
+}
 
 export const sfx = {
   get muted() { return muted; },
@@ -173,6 +188,50 @@ export const sfx = {
     tone(500, { type: 'triangle', decay: 0.35, vol: 0.2, to: 1400 });
     tone(1400, { type: 'triangle', t: 0.3, decay: 0.3, vol: 0.12, to: 400 });
   },
+  // ---- live cards ----
+  buzz(pan, stunned) { // the Pesky Fly; pan follows it across the screen, null stops it
+    if (pan == null || !ok()) return stopLoop('buzz');
+    const n = loops.buzz ||= startLoop(g => {
+      const o = ctx.createOscillator(), l = ctx.createOscillator(), lg = ctx.createGain(), f = ctx.createBiquadFilter();
+      o.type = 'sawtooth'; o.frequency.value = 210; l.frequency.value = 23; lg.gain.value = 25;
+      f.type = 'bandpass'; f.frequency.value = 900; f.Q.value = 1.5;
+      l.connect(lg).connect(o.frequency); o.connect(f).connect(g); o.start(); l.start();
+      return t => { o.stop(t); l.stop(t); };
+    });
+    n.g.gain.setTargetAtTime(stunned ? 0 : 0.1, ctx.currentTime, 0.05);
+    n.pan.pan.setTargetAtTime(Math.max(-1, Math.min(1, pan)), ctx.currentTime, 0.05);
+  },
+  blower(on) { // Leaf Blower: a rough engine drone
+    if (!on || !ok()) return stopLoop('blower');
+    const n = loops.blower ||= startLoop(g => {
+      const s = ctx.createBufferSource(), f = ctx.createBiquadFilter(), o = ctx.createOscillator(), og = ctx.createGain();
+      s.buffer = noiseBuf; s.loop = true; f.type = 'bandpass'; f.frequency.value = 700; f.Q.value = 0.8;
+      o.type = 'sawtooth'; o.frequency.value = 95; og.gain.value = 0.25;
+      s.connect(f).connect(g); o.connect(og).connect(g); s.start(); o.start();
+      return t => { s.stop(t); o.stop(t); };
+    });
+    n.g.gain.setTargetAtTime(0.3, ctx.currentTime, 0.05);
+  },
+  splat() { if (!ok()) return; noise({ decay: 0.2, vol: 0.55, type: 'lowpass', freq: 900, to: 180, verb: 0.2 }); tone(150, { decay: 0.14, vol: 0.3, to: 55 }); },
+  horn() { if (!ok()) return; [233, 294, 349].forEach(f => tone(f, { type: 'sawtooth', attack: 0.02, decay: 1.1, vol: 0.15, lp: 2600, verb: 0.4 })); },
+  swat() { if (!ok()) return; noise({ decay: 0.06, vol: 0.5, freq: 2500, Q: 0.8 }); tone(300, { decay: 0.08, vol: 0.2, to: 120 }); },
+  bonk() { if (!ok()) return; tone(520, { type: 'triangle', decay: 0.18, vol: 0.35, to: 260 }); noise({ decay: 0.05, vol: 0.25, freq: 1500, Q: 2 }); },
+  squawk() { if (!ok()) return; for (const t of [0, 0.22]) tone(1300, { type: 'sawtooth', t, attack: 0.02, decay: 0.18, vol: 0.12, to: 800, lp: 3000 }); },
+  warp() { if (!ok()) return; tone(300, { decay: 0.4, vol: 0.2, to: 1600 }); noise({ attack: 0.05, decay: 0.35, vol: 0.2, freq: 400, to: 5000, Q: 2 }); },
+  pop() { if (!ok()) return; noise({ decay: 0.08, vol: 0.4, freq: 1800, Q: 0.7 }); tone(700, { decay: 0.15, vol: 0.2, to: 300 }); },
+  hype() { if (!ok()) return; applause(1.6, 0.1); [523, 659, 784, 1046].forEach((f, i) => tone(f, { type: 'square', t: i * 0.07, decay: 0.2, vol: 0.05, lp: 2500 })); },
+  brush() { if (ok()) noise({ decay: 0.09, vol: 0.14, type: 'highpass', freq: 3000 }); },
+  tick() { if (ok()) tone(1800, { decay: 0.02, vol: 0.05, verb: 0 }); },
+  squeak() { if (!ok()) return; tone(1700, { type: 'triangle', decay: 0.1, vol: 0.12, to: 2600 }); tone(1900, { type: 'triangle', t: 0.12, decay: 0.12, vol: 0.1, to: 2900 }); },
+  scribble() {
+    if (!ok()) return;
+    const now = performance.now();
+    if (now - lastScribble < 70) return;
+    lastScribble = now;
+    noise({ decay: 0.06, vol: 0.06, freq: 3500 + Math.random() * 1500, Q: 3, verb: 0 });
+  },
+  vote() { if (ok()) [660, 880, 1100].forEach((f, i) => tone(f, { type: 'triangle', t: i * 0.08, decay: 0.25, vol: 0.12 })); },
+
   yourTurn() { // bright arcade "ding-ding" so you notice even when looking away
     if (!ok()) return;
     noise({ attack: 0.12, decay: 0.12, vol: 0.12, freq: 600, to: 5000, Q: 1.2 });

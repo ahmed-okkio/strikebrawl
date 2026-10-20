@@ -8,13 +8,14 @@ if (process.env.SMOKE || process.env.PLAYTEST) app.setPath('userData', path.join
 app.whenReady().then(() => {
   // SMOKE=<png path> runs a bots-only game, screenshots it, then quits (used for testing).
   const smoke = process.env.SMOKE;
-  const win = new BrowserWindow({
-    width: 1400, height: 860, backgroundColor: '#15123a', autoHideMenuBar: true,
-    title: 'Strike Brawl', icon: path.join(__dirname, 'build', 'icon.png'), webPreferences: { backgroundThrottling: false },
-  });
   const playtest = process.env.PLAYTEST; // dev only: scripted playthrough, see playtest.cjs
-  // test runs render normally (hidden windows lose GPU/audio) but sit off-screen, out of the taskbar, without stealing focus
-  if (smoke || playtest) { win.hide(); win.setSkipTaskbar(true); win.setPosition(-4000, 0); win.showInactive(); win.webContents.setAudioMuted(true); }
+  // test runs use offscreen rendering: no OS window at all, so nothing can take focus from whatever the user is doing
+  const test = !!(smoke || playtest);
+  const win = new BrowserWindow({
+    width: 1400, height: 860, backgroundColor: '#15123a', autoHideMenuBar: true, show: !test,
+    title: 'Strike Brawl', icon: path.join(__dirname, 'build', 'icon.png'), webPreferences: { backgroundThrottling: false, offscreen: test },
+  });
+  if (test) { win.webContents.setAudioMuted(true); win.webContents.setFrameRate(60); }
   if (playtest) require('./playtest.cjs')(win, playtest);
   const hash = smoke ? process.env.SMOKE_HASH ?? 'auto' : playtest ? process.env.PLAYTEST_HASH || 'playtest' : '';
   const updates = app.isPackaged && !smoke && !playtest;

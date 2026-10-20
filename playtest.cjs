@@ -13,9 +13,22 @@ module.exports = function playtest(win, outDir) {
   const snap = async name => fs.writeFileSync(path.join(outDir, `${String(++shot).padStart(2, '0')}-${name}.png`), (await win.capturePage()).toPNG());
 
   wc.on('console-message', (_e, _level, msg) => console.log('[page]', msg));
+  if (process.env.PLAYTEST_HASH === 'livetest') { // livetest.js plays itself; collect its results and screenshots
+    wc.once('did-finish-load', async () => {
+      for (;;) {
+        await sleep(500);
+        const r = await js('window.__liveDone').catch(() => null);
+        if (!r) continue;
+        for (const [name, url] of Object.entries(r.shots)) fs.writeFileSync(path.join(outDir, `${name}.png`), Buffer.from(url.split(',')[1], 'base64'));
+        fs.writeFileSync(path.join(outDir, 'results.json'), JSON.stringify(r.results, null, 1));
+        win.close();
+        return;
+      }
+    });
+    return;
+  }
   wc.once('did-finish-load', async () => {
     if (process.env.PLAYTEST_NOPLAY) return;
-    wc.focus(); // keyboard events go to the page; the window itself stays off-screen and unfocused
     await sleep(1500);
     let throws = 0, ultTried = false;
     for (;;) {
